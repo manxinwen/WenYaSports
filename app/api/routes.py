@@ -202,3 +202,119 @@ async def rag_chat(body: dict):
         logger.exception("RAG 问答失败")
         raise HTTPException(status_code=500, detail=f"RAG 问答失败: {exc}") from exc
     return {"user_id": user_id, "question": question, **result}
+
+
+# ----------------------------------------------------------------------
+# Agent Trace & Observability API (for Agent Trace Dashboard)
+# ----------------------------------------------------------------------
+from app.trace import trace_collector
+
+@router.get("/agent-traces")
+def get_agent_traces(limit: int = Query(20, ge=1, le=100)):
+    """Get recent agent sessions and their summary."""
+    history = trace_collector.get_session_history(limit=limit)
+    return {"sessions": history, "total": len(history)}
+
+@router.get("/agent-traces/{session_id}")
+def get_agent_trace_detail(session_id: str):
+    """Get the full trace steps for a specific session."""
+    trace = trace_collector.get_trace(session_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found for session")
+    return {"session_id": session_id, "steps": trace, "total_steps": len(trace)}
+
+
+# ----------------------------------------------------------------------
+# Memory Inspector API
+# ----------------------------------------------------------------------
+@router.get("/memory")
+def get_memory_state():
+    """Get current memory system state (for Memory Inspector UI)."""
+    return trace_collector.get_memory_state()
+
+@router.post("/memory/search")
+def search_memory(body: dict):
+    """Search memory by query (simulated for demo)."""
+    query = body.get("query", "")
+    # In a real app, this would use the vector store.
+    # For now, we return simulated results based on the query.
+    results = [
+        {"content": "用户近一个月跑量增加 15%", "score": 0.95, "source": "user_profile"},
+        {"content": "用户最近 5 次配速稳定在 5:30", "score": 0.88, "source": "activity_features"},
+        {"content": "用户有两次全马经历，平均完赛时间 4:15:00", "score": 0.82, "source": "user_profile"},
+    ]
+    if query:
+        results = [r for r in results if query.lower() in r["content"].lower()]
+    return {"query": query, "results": results}
+
+
+# ----------------------------------------------------------------------
+# Test Playground API (for Agent Mock Testing)
+# ----------------------------------------------------------------------
+@router.post("/agent-test")
+def run_agent_test(body: dict):
+    """Simulate agent runs with different scenarios for testing purposes."""
+    scenario = body.get("scenario", "normal")
+    test_cases = {
+        "normal": {
+            "name": "正常流程",
+            "description": "用户请求正常问答，Agent 成功调用工具并返回答案",
+            "steps": [
+                {"type": "thought", "content": "分析用户意图：需要查询配速数据"},
+                {"type": "action", "content": "调用 query_user_profile 工具"},
+                {"type": "observation", "content": "获取到用户配速数据：5:30/km"},
+                {"type": "final", "content": "生成最终答案：您的配速稳定，建议保持"},
+            ],
+            "success": True,
+            "latency_ms": 1250,
+        },
+        "tool_failure": {
+            "name": "工具降级",
+            "description": "模拟 LLM 决定调用不存在的工具，Agent 如何降级",
+            "steps": [
+                {"type": "thought", "content": "分析用户意图：调用天气工具"},
+                {"type": "action", "content": "调用 get_weather 工具 (不存在)"},
+                {"type": "observation", "content": "工具调用失败，返回错误"},
+                {"type": "action", "content": "Agent 降级：改用已有数据回答"},
+                {"type": "final", "content": "生成降级答案：根据您的历史数据..."},
+            ],
+            "success": True,
+            "latency_ms": 2100,
+        },
+        "max_loop": {
+            "name": "最大迭代",
+            "description": "模拟 Agent 陷入循环，达到最大迭代次数",
+            "steps": [
+                {"type": "thought", "content": "第 1 轮：尝试调用工具 A"},
+                {"type": "action", "content": "调用工具 A"},
+                {"type": "observation", "content": "返回结果不完整"},
+                {"type": "thought", "content": "第 2 轮：尝试调用工具 B"},
+                {"type": "action", "content": "调用工具 B"},
+                {"type": "observation", "content": "返回结果仍不完整"},
+                {"type": "thought", "content": "...持续循环"},
+                {"type": "final", "content": "达到最大迭代次数 (5)，返回失败"},
+            ],
+            "success": False,
+            "latency_ms": 5000,
+        },
+        "ambiguous": {
+            "name": "模糊意图",
+            "description": "处理用户模糊请求，需要多轮澄清",
+            "steps": [
+                {"type": "thought", "content": "用户意图模糊：'我该怎么训练'"},
+                {"type": "action", "content": "生成澄清问题：'您的目标是减脂还是提高成绩？'"},
+                {"type": "observation", "content": "用户回复：'提高半马成绩'"},
+                {"type": "action", "content": "查询用户半马历史和目标"},
+                {"type": "observation", "content": "获取到当前半马 1:55，目标 1:40"},
+                {"type": "final", "content": "生成针对性的半马训练计划"},
+            ],
+            "success": True,
+            "latency_ms": 3200,
+        },
+    }
+    result = test_cases.get(scenario, test_cases["normal"])
+    return {
+        "scenario": scenario,
+        "test_result": result,
+        "timestamp": time.time(),
+    }

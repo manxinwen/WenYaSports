@@ -38,6 +38,7 @@ class ReActAgent(BaseAgent):
     :param openai_api_key: OpenAI API Key；缺省时读取环境变量 OPENAI_API_KEY。
     :param model: 使用的模型名。
     :param max_iterations: 工具调用循环的最大轮数。
+    :param trace_collector: 用于追踪步骤的收集器 (用于可观测性)。
     """
 
     def __init__(
@@ -48,7 +49,9 @@ class ReActAgent(BaseAgent):
         model: str = _DEFAULT_MODEL,
         max_iterations: int = _MAX_ITERATIONS,
         session_log: Optional[SessionLog] = None,
+        trace_collector=None,
     ) -> None:
+        super().__init__(name="react_agent", trace_collector=trace_collector)
         self.plugin_manager = plugin_manager
         self.llm_enabled = llm_enabled
         self.openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
@@ -76,12 +79,27 @@ class ReActAgent(BaseAgent):
             session_id, EventType.AGENT_START, "react_agent",
             {"request": user_request, "context": context},
         )
+        # Trace: Step 1 - Thought/Start
+        self._trace_step(
+            session_id=session_id,
+            step_type="thought",
+            thought=f"收到请求: {user_request}",
+            detail={"context_available": context is not None},
+        )
+
         if not self.llm_enabled or not self.openai_api_key:
+            error_msg = "LLM 未启用或未配置 API Key"
+            self._trace_step(
+                session_id=session_id,
+                step_type="final",
+                thought=f"降级处理: {error_msg}",
+                detail={"success": False, "error": error_msg},
+            )
             return self._finish(
                 session_id,
                 success=False,
                 answer=None,
-                error="LLM 未启用或未配置 API Key",
+                error=error_msg,
                 tool_calls=[],
                 iterations=0,
             )
@@ -105,10 +123,29 @@ class ReActAgent(BaseAgent):
                 session_id, EventType.LLM_REQUEST, "react_agent",
                 {"model": self.model, "messages": messages},
             )
+            
+            # Trace: Step 2 - Action (LLM Call)
+            self._trace_step(
+                session_id=session_id,
+                step_type="action",
+                thought=f"第 {iteration} 次迭代: 准备调用 LLM ({self.model})",
+                detail={
+                    "model": self.model,
+                    "prompt_tokens": len(str(messages)),
+                    "tools_available": [t.get("function", {}).get("name", "unknown") for t in tools],
+                },
+            )
+
             try:
                 resp = self._chat(messages, tools)
             except Exception as exc:  # noqa: BLE001 - LLM 故障需兜底
                 logger.warning("LLM 调用失败：%s", exc)
+                self._trace_step(
+                    session_id=session_id,
+                    step_type="final",
+                    thought=f"LLM 调用失败: {exc}",
+                    detail={"success": False, "error": str(exc)},
+                )
                 return self._finish(
                     session_id,
                     success=False,
@@ -120,6 +157,18 @@ class ReActAgent(BaseAgent):
 
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None)
+            
+            # Trace: Step 3 - Observation (LLM Response)
+            self._trace_step(
+                session_id=session_id,
+                step_type="observation",
+                thought=f"LLM 返回: {len(tool_calls or [])} 个工具调用",
+                detail={
+                    "content": msg.content,
+                    "tool_calls_decided": [tc.function.name for tc in tool_calls or []],
+                },
+            )
+
             self._record(
                 session_id, EventType.LLM_RESPONSE, "react_agent",
                 None,
@@ -129,6 +178,13 @@ class ReActAgent(BaseAgent):
                 },
             )
             if not tool_calls:
+                # Trace: Final Answer
+                self._trace_step(
+                    session_id=session_id,
+                    step_type="final",
+                    thought="LLM 生成了最终答案，无需额外工具调用",
+                    detail={"success": True, "answer_length": len(msg.content or "")},
+                )
                 return self._finish(
                     session_id,
                     success=True,
@@ -153,7 +209,30 @@ class ReActAgent(BaseAgent):
 
             # 逐个执行工具，结果作为 tool 消息回填
             for tc in tool_calls:
+                # Trace: Tool Call Start
+                self._trace_step(
+                    session_id=session_id,
+                    step_type="action",
+                    thought=f"执行工具: {tc.function.name}",
+                    detail={
+                        "tool_name": tc.function.name,
+                        "tool_args": tc.function.arguments,
+                    },
+                )
+                
                 result = self._execute_tool(tc)
+                
+                # Trace: Tool Call Result
+                self._trace_step(
+                    session_id=session_id,
+                    step_type="observation",
+                    thought=f"工具 {tc.function.name} 执行完成",
+                    detail={
+                        "tool_result": result,
+                        "success": "error" not in result,
+                    },
+                )
+
                 self._record(
                     session_id, EventType.TOOL_CALL, "react_agent",
                     {"tool_name": tc.function.name, "args": result.get("args")},
@@ -170,6 +249,13 @@ class ReActAgent(BaseAgent):
                     }
                 )
 
+        # Trace: Max iterations reached
+        self._trace_step(
+            session_id=session_id,
+            step_type="final",
+            thought=f"达到最大迭代次数 {self.max_iterations}",
+            detail={"success": False, "error": f"达到最大迭代次数 {self.max_iterations}"},
+        )
         return self._finish(
             session_id,
             success=False,

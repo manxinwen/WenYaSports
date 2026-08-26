@@ -5,6 +5,9 @@ import ActivityDetailPage from './pages/ActivityDetailPage';
 import ChatPage from './pages/ChatPage';
 import ProfilePage from './pages/ProfilePage';
 import UploadPage from './pages/UploadPage';
+import AgentTracePage from './pages/AgentTracePage';
+import MemoryInspectorPage from './pages/MemoryInspectorPage';
+import TestPlaygroundPage from './pages/TestPlaygroundPage';
 import './index.css';
 
 const navItems = [
@@ -13,6 +16,12 @@ const navItems = [
   { path: '/upload', icon: '⬆', label: '上传活动', sub: 'UPLOAD' },
   { path: '/chat', icon: '💬', label: 'AI 私教', sub: 'AI COACH' },
   { path: '/profile', icon: '◉', label: '个人中心', sub: 'PROFILE' },
+];
+
+const devNavItems = [
+  { path: '/agent-trace', icon: '🔍', label: 'Agent 轨迹', sub: 'TRACE' },
+  { path: '/memory', icon: '🧠', label: '记忆探针', sub: 'MEMORY' },
+  { path: '/test-lab', icon: '🧪', label: '测试操场', sub: 'TEST LAB' },
 ];
 
 function Sidebar() {
@@ -50,6 +59,40 @@ function Sidebar() {
                 fontSize: 9,
                 letterSpacing: '0.2em',
                 color: 'var(--ink-400)',
+                textTransform: 'uppercase',
+                marginTop: 2,
+              }}>
+                {item.sub}
+              </span>
+            </div>
+          </NavLink>
+        ))}
+      </nav>
+
+      {/* Developer section */}
+      <div style={{ padding: '16px 14px 4px', marginTop: 'auto' }}>
+        <div className="sidebar-section-title" style={{ color: 'var(--cyan)' }}>
+          <span style={{ color: 'var(--flame)' }}>●</span> AGENT DEVELOPER
+        </div>
+      </div>
+
+      <nav className="sidebar-nav" style={{ paddingTop: 0 }}>
+        {devNavItems.map((item) => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            className={({ isActive }) =>
+              `nav-item ${isActive ? 'active' : ''}`
+            }
+          >
+            <span className="nav-icon" style={{ opacity: 0.8 }}>{item.icon}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-200)' }}>{item.label}</span>
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 8,
+                letterSpacing: '0.15em',
+                color: 'var(--ink-500)',
                 textTransform: 'uppercase',
                 marginTop: 2,
               }}>
@@ -98,6 +141,10 @@ function App() {
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+            {/* Agent Developer Pages */}
+            <Route path="/agent-trace" element={<AgentTracePage />} />
+            <Route path="/memory" element={<MemoryInspectorPage />} />
+            <Route path="/test-lab" element={<TestPlaygroundPage />} />
           </Routes>
         </main>
       </div>
