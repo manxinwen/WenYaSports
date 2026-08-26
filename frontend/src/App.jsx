@@ -8,6 +8,7 @@ import UploadPage from './pages/UploadPage';
 import AgentTracePage from './pages/AgentTracePage';
 import MemoryInspectorPage from './pages/MemoryInspectorPage';
 import TestPlaygroundPage from './pages/TestPlaygroundPage';
+import HarnessArchPage from './pages/HarnessArchPage';
 import './index.css';
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
 ];
 
 const devNavItems = [
+  { path: '/harness', icon: '🏗️', label: 'Harness 架构', sub: 'HARNESS' },
   { path: '/agent-trace', icon: '🔍', label: 'Agent 轨迹', sub: 'TRACE' },
   { path: '/memory', icon: '🧠', label: '记忆探针', sub: 'MEMORY' },
   { path: '/test-lab', icon: '🧪', label: '测试操场', sub: 'TEST LAB' },
@@ -142,6 +144,7 @@ function App() {
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             {/* Agent Developer Pages */}
+            <Route path="/harness" element={<HarnessArchPage />} />
             <Route path="/agent-trace" element={<AgentTracePage />} />
             <Route path="/memory" element={<MemoryInspectorPage />} />
             <Route path="/test-lab" element={<TestPlaygroundPage />} />

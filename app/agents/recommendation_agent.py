@@ -28,6 +28,18 @@ _SYSTEM_PROMPT = (
 
 
 class RecommendationAgent(BaseAgent):
+    """Generates training recommendations based on features and user profile.
+
+    Supports Harness integration for:
+    - Trace recording for observability
+    - Message-based communication with other agents
+    - Blackboard data sharing
+    """
+
+    agent_id = "recommender"
+    agent_name = "Recommendation Engine"
+    capabilities = ["training_advice", "rule_engine", "llm_generation"]
+
     def __init__(self, llm_enabled: bool = True, openai_api_key: Optional[str] = None):
         self.llm_enabled = llm_enabled
         self.openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
@@ -38,21 +50,85 @@ class RecommendationAgent(BaseAgent):
         user_profile: dict,
         short_term_context: dict,
     ) -> Recommendation:
+        self._execution_count += 1
+        self._last_input = f"Features: load={features.training_load:.1f}"
+
+        self._trace_step(
+            step_type="thought",
+            thought=f"分析活动特征，生成训练建议",
+            detail={
+                "training_load": features.training_load,
+                "intensity": features.intensity_distribution,
+                "has_user_profile": bool(user_profile),
+            },
+        )
+
+        self._trace_step(
+            step_type="action",
+            thought="执行规则引擎评估",
+            detail={"rules": ["recovery_days", "training_zones"]},
+        )
+
         rules = apply_rules(features, user_profile)
         recovery_days = rules["recovery_days"]
         training_zones = rules["training_zones"]
 
+        self._trace_step(
+            step_type="observation",
+            thought=f"规则引擎结果: 恢复{recovery_days}天, 训练区间={training_zones}",
+            detail=rules,
+        )
+
         suggestion_text = rules["rule_based_suggestion"]
         if self.llm_enabled and self.openai_api_key:
+            self._trace_step(
+                step_type="action",
+                thought="调用 LLM 生成自然语言建议",
+                detail={"model": _LLM_MODEL},
+            )
             suggestion_text = self._generate_with_llm(
                 features, user_profile, short_term_context, rules
             )
 
-        return Recommendation(
+        result = Recommendation(
             suggestion_text=suggestion_text,
             recovery_days=recovery_days,
             training_zones=training_zones,
         )
+        self._last_output = result
+
+        if self.blackboard:
+            self.write_to_blackboard(
+                namespace="recommendation_results",
+                key=f"recommendation_{self._execution_count}",
+                value={
+                    "recovery_days": recovery_days,
+                    "training_zones": training_zones,
+                    "suggestion_length": len(suggestion_text),
+                },
+            )
+
+        self._trace_step(
+            step_type="final",
+            thought=f"建议生成完成: {recovery_days}天恢复, {training_zones}区间",
+            detail={
+                "recovery_days": recovery_days,
+                "training_zones": training_zones,
+                "suggestion_preview": suggestion_text[:100] if suggestion_text else "",
+            },
+        )
+
+        if self.message_bus:
+            self.broadcast_message(
+                message_type="agent_completed",
+                payload={
+                    "agent_id": self.agent_id,
+                    "status": "success",
+                    "output_summary": f"Rest={recovery_days}d, Zones={training_zones}",
+                },
+            )
+
+        return result
 
     def _build_prompt(
         self, features: ActivityFeatures, user_profile: dict, short_term_context: dict, rules: dict

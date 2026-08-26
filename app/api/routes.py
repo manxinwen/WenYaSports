@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import uuid
 from typing import Optional
 
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.agents.coordinator_agent import CoordinatorAgent, CoordinatorError
 from app.db import database
+from app.harness_setup import get_harness, get_analysis_workflow, get_chat_workflow
 from app.services.fit_parser import parse_fit_file
 
 logger = logging.getLogger(__name__)
@@ -318,3 +320,162 @@ def run_agent_test(body: dict):
         "test_result": result,
         "timestamp": time.time(),
     }
+
+
+# ----------------------------------------------------------------------
+# Harness Architecture API
+# ----------------------------------------------------------------------
+
+@router.get("/harness/status")
+def get_harness_status():
+    """Get complete Harness system status."""
+    harness = get_harness()
+    return harness.get_system_status()
+
+
+@router.get("/harness/agents")
+def list_harness_agents():
+    """List all registered agents and their capabilities."""
+    harness = get_harness()
+    agents = harness.registry.list_agents()
+    return {
+        "total_agents": len(agents),
+        "agents": agents,
+        "available_capabilities": harness.registry.get_available_capabilities(),
+    }
+
+
+@router.get("/harness/agents/{agent_id}")
+def get_harness_agent(agent_id: str):
+    """Get detailed status of a specific agent."""
+    harness = get_harness()
+    status = harness.get_agent_status(agent_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    return status
+
+
+@router.post("/harness/workflow/analyze")
+def run_harness_analysis_workflow(body: dict):
+    """Run the activity analysis workflow through Harness.
+
+    This demonstrates the full multi-agent pipeline:
+    1. ParserAgent → Parse FIT file
+    2. FeatureExtractorAgent → Extract metrics
+    3. MemoryAgent → Load user context
+    4. RecommendationAgent → Generate advice
+    5. MemoryAgent → Update user profile
+
+    Body: {file_path, user_id, session_id}
+    """
+    file_path = body.get("file_path")
+    user_id = body.get("user_id", "default_user")
+    session_id = body.get("session_id", str(uuid.uuid4()))
+
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path is required")
+
+    harness = get_harness()
+    workflow_steps = get_analysis_workflow()
+
+    # Prepare initial input for workflow
+    initial_input = {
+        "file_path": file_path,
+        "user_id": user_id,
+        "session_id": session_id,
+    }
+
+    # Execute workflow through harness
+    result = harness.run_workflow(
+        workflow_name="activity_analysis",
+        steps=workflow_steps,
+        initial_input=initial_input,
+        session_id=session_id,
+    )
+
+    return result
+
+
+@router.post("/harness/workflow/chat")
+def run_harness_chat_workflow(body: dict):
+    """Run the AI chat workflow through Harness.
+
+    Body: {user_id, question, session_id}
+    """
+    user_id = body.get("user_id", "default_user")
+    question = body.get("question", "")
+    session_id = body.get("session_id", str(uuid.uuid4()))
+
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    harness = get_harness()
+    workflow_steps = get_chat_workflow()
+
+    initial_input = {
+        "user_id": user_id,
+        "question": question,
+        "session_id": session_id,
+    }
+
+    result = harness.run_workflow(
+        workflow_name="ai_chat",
+        steps=workflow_steps,
+        initial_input=initial_input,
+        session_id=session_id,
+    )
+
+    return result
+
+
+@router.post("/harness/orchestrate")
+def run_harness_orchestration(body: dict):
+    """Run dynamic orchestration to achieve a goal.
+
+    Unlike fixed workflows, orchestration allows agents to
+    discover each other and collaborate dynamically.
+
+    Body: {goal, initial_input, max_iterations, session_id}
+    """
+    goal = body.get("goal", "")
+    initial_input = body.get("initial_input", {})
+    max_iterations = body.get("max_iterations", 10)
+    session_id = body.get("session_id", str(uuid.uuid4()))
+
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal is required")
+
+    harness = get_harness()
+
+    result = harness.orchestrate(
+        goal=goal,
+        initial_input=initial_input,
+        max_iterations=max_iterations,
+        session_id=session_id,
+    )
+
+    return result
+
+
+@router.get("/harness/blackboard")
+def get_blackboard_state(namespace: Optional[str] = None):
+    """Get blackboard state - shared data between agents."""
+    harness = get_harness()
+    if namespace:
+        data = harness.blackboard.read(namespace)
+        return {"namespace": namespace, "data": data}
+    return harness.blackboard.get_stats()
+
+
+@router.get("/harness/messages")
+def get_message_bus_stats():
+    """Get message bus statistics."""
+    harness = get_harness()
+    return harness.message_bus.get_stats()
+
+
+@router.get("/harness/governance")
+def get_governance_state():
+    """Get governance engine state and budget tracking."""
+    harness = get_harness()
+    return harness.governance.get_stats()

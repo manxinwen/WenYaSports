@@ -109,7 +109,7 @@ class TraceCollector:
                 sess["status"] = "completed" if success else "failed"
                 sess["total_steps"] = total_steps
                 sess["agents_used"] = list(
-                    {s["agent_name"] for s in self._traces.get(session_id, [])}
+                    {s.agent_name for s in self._traces.get(session_id, [])}
                 )
                 break
 
