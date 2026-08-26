@@ -1,0 +1,19 @@
+{
+    "plugins": [
+        {
+            "name": "weather",
+            "enabled": true,
+            "config": {
+                "api_key": "YOUR_API_KEY",
+                "default_city": "Beijing"
+            }
+        },
+        {
+            "name": "map_routing",
+            "enabled": true,
+            "config": {
+                "api_key": "YOUR_MAPBOX_TOKEN"
+            }
+        }
+    ]
+}

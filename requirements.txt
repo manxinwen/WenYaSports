@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+fitparse
+polars
+pydantic
+python-multipart
+openai
+cachetools
+requests
+pytest
+httpx
+
+# RAG（检索增强生成）
+chromadb
+sentence-transformers
+langchain-text-splitters
+pypdf
