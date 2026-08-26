@@ -1,149 +1,211 @@
-# FIT 运动分析与多智能体训练推荐系统
+# WenYaSports - 个人运动历史记录与 AI 私教平台
 
-基于 **FastAPI + 多智能体架构** 的 FIT 运动文件解析与训练分析系统，提供 RESTful API 与 React 前端，实现「上传 FIT 文件 → 解析 → 特征提取 → 记忆管理 → 生成个性化训练建议 → 可视化展示」的完整流程。
+基于 **FastAPI + React** 的个人运动历史记录平台，集运动数据解析、智能分析、可视化追踪与 AI 私教于一体。
 
-## 项目简介
+![Dashboard Screenshot](frontend_dashboard.png)
 
-- 解析 Garmin/佳明等运动设备导出的 `.fit` 运动记录文件
-- 计算心率区间、平均配速、累计爬升、训练负荷（TRIMP）、间歇训练识别等特征
-- 规则引擎 + LLM 混合的个性化训练建议生成（LLM 不可用时自动降级为规则建议）
-- 短期记忆（TTL 缓存）与长期记忆（SQLite）支撑用户画像与近期训练负荷追踪
-- 前端可视化：指标卡片、Leaflet 轨迹地图、Recharts 心率/配速/海拔曲线
+## ✨ 核心特性
 
-## 技术栈
+### 📊 个人运动历史平台
+- **仪表盘**：核心指标一览（里程、时长、配速、消耗），周训练强度趋势，运动类型分布
+- **活动历史**：完整运动档案，支持筛选（跑步/骑行/徒步/游泳）与多维度排序
+- **AI 私教**：基于你的完整运动档案进行智能问答与个性化分析
+- **个人中心**：综合能力雷达图、身体数据追踪、成就徽章、年度目标计划
+- **活动详情**：心率区间、训练轨迹地图、训练建议、数据曲线
 
-| 层 | 技术 |
-| --- | --- |
-| 后端 | Python 3.14、FastAPI、Uvicorn、Pydantic v2、Polars、fitparse |
-| 存储 | SQLite（长期记忆）、cachetools.TTLCache（短期记忆） |
-| LLM | openai（可选，用于生成自然语言建议） |
-| 前端 | React 19、Vite、Ant Design 6、Axios、React Router、Leaflet、Recharts |
-| 测试 | pytest、FastAPI TestClient、httpx、unittest.mock |
+### 🧠 多智能体分析系统
+- **ParserAgent**: 解析 Garmin/佳明等运动设备 `.fit` 文件
+- **FeatureExtractorAgent**: 提取心率区间、配速、爬升、TRIMP 等特征
+- **MemoryAgent**: 短期记忆 + SQLite 长期记忆，构建用户运动画像
+- **RecommendationAgent**: 规则引擎 + LLM 混合的个性化训练建议
 
-## 系统架构（多智能体流水线）
+### 🎨 运动科技编辑风格 UI
+- **深色主题**：深邃石板色背景搭配火焰橙强调色
+- **运动字体**：Oswald (标题) + Manrope (正文) + JetBrains Mono (数据)
+- **响应式布局**：侧边栏导航 + 主内容区，自适应多设备
+- **数据可视化**：Recharts 专业图表，Leaflet 运动轨迹地图
 
-```
-                    ┌────────────────────────────────────────────────┐
- 上传 FIT 文件 ───▶ │ CoordinatorAgent（协调者）                       │
-                    │  1. ParserAgent         → ParsedActivity        │
-                    │  2. FeatureExtractorAgent → ActivityFeatures    │
-                    │  3. MemoryAgent.get_context → 用户画像/近期负荷 │
-                    │  4. RecommendationAgent → 训练建议(规则+LLM)    │
-                    │  5. MemoryAgent.update   → 持久化+画像更新      │
-                    └────────────────────────────────────────────────┘
-```
+## 🛠️ 技术栈
 
-- **ParserAgent**：`fitparse` 读取 FIT，提取 record/session，字段归一化、单位换算（经纬度、海拔、速度等）
-- **FeatureExtractorAgent**：心率区间占比、配速、爬升、TRIMP 训练负荷、间歇训练识别、强度类型判定
-- **MemoryAgent**：`TTLCache(maxsize=100, ttl=1800)` 短期会话记忆；SQLite 存储用户画像与活动记录
-- **RecommendationAgent**：规则引擎计算恢复天数与训练区间；LLM 仅生成自然语言建议，失败自动降级
-- **CoordinatorAgent**：编排流水线，异常分级处理（解析失败 400 / 其他 500 / 推荐失败降级返回部分结果）
+| 层级 | 技术 |
+|-----|------|
+| 后端 | Python 3.14、FastAPI、Pydantic v2、fitparse |
+| 存储 | SQLite、cachetools.TTLCache |
+| AI | RAG 向量检索、LLM 训练建议生成 |
+| 前端 | React 19、Vite、Ant Design 6、Recharts、Leaflet |
+| 测试 | pytest、FastAPI TestClient |
 
-## 目录结构
+## 🏗️ 系统架构
 
 ```
-.
-├── app/
-│   ├── main.py                  # FastAPI 入口（CORS、路由挂载、DB 初始化）
-│   ├── agents/                  # 各 Agent：base/parser/feature/memory/coordinator/recommendation
-│   ├── models/                  # Pydantic 模型：activity/features/recommendation
-│   ├── services/                # 业务逻辑：fit_parser/feature_engine/recommendation_rules
-│   ├── db/                      # SQLite 持久化（users / activities 表）
-│   ├── api/routes.py            # REST API 路由
-│   └── utils/
-├── frontend/                    # React 前端（Vite + antd + Leaflet + Recharts）
+                    ┌─────────────────────────────────────────────────────┐
+  上传 FIT 文件 ───▶ │ CoordinatorAgent（协调者）                             │
+                    │  1. ParserAgent        → ParsedActivity               │
+                    │  2. FeatureExtractorAgent → ActivityFeatures         │
+                    │  3. MemoryAgent.get_context → 用户画像/近期负荷      │
+                    │  4. RecommendationAgent  → 训练建议 (规则 + LLM)       │
+                    │  5. MemoryAgent.update  → 持久化 + 画像更新          │
+                    └─────────────────────────────────────────────────────┘
+```
+
+## 📁 目录结构
+
+```
+WenYaSports/
+├── app/                          # 后端应用
+│   ├── main.py                   # FastAPI 入口
+│   ├── agents/                   # 多智能体模块
+│   ├── models/                   # Pydantic 数据模型
+│   ├── services/                 # 业务逻辑服务
+│   ├── db/                       # SQLite 数据库
+│   └── api/routes.py             # REST API 路由
+├── rag/                          # RAG 知识库
+│   ├── base.py                   # 向量存储基类
+│   ├── manager.py                # RAG 管理器
+│   └── chroma_store.py           # ChromaDB 存储
+├── frontend/                    # React 前端
 │   └── src/
-│       ├── pages/               # UploadPage / ActivityDetailPage
-│       ├── components/          # ActivityMap / ActivityCharts
-│       ├── utils/format.js      # 展示格式化
-│       └── api.js               # Axios 实例（/api 代理）
-├── tests/                       # pytest 单元测试 + 端到端测试
-└── requirements.txt
+│       ├── pages/
+│       │   ├── DashboardPage.jsx      # 仪表盘首页
+│       │   ├── ActivitiesPage.jsx     # 运动历史列表
+│       │   ├── ChatPage.jsx           # AI 私教对话
+│       │   ├── ProfilePage.jsx        # 个人中心
+│       │   ├── UploadPage.jsx         # 文件上传
+│       │   └── ActivityDetailPage.jsx # 活动详情
+│       ├── components/           # 可复用组件
+│       └── index.css             # 全局样式
+├── tests/                        # 测试用例
+└── README.md
 ```
 
-## 安装与运行
+## 🚀 快速开始
 
-### 后端
+### 1. 克隆仓库
 
 ```bash
-# 1. 创建虚拟环境并安装依赖
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2. 启动服务（默认 http://127.0.0.1:8000）
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+git clone https://github.com/manxinwen/WenYaSports.git
+cd WenYaSports
 ```
 
-环境变量（可选）：
+### 2. 启动后端服务
 
-| 变量 | 说明 |
-| --- | --- |
-| `FIT_APP_DB` | SQLite 数据库文件路径，默认 `app.db` |
-| `FIT_UPLOAD_DIR` | 上传文件保存目录，默认系统临时目录 |
-| `OPENAI_API_KEY` | 提供后启用 LLM 建议生成（未提供时自动使用规则建议） |
+```bash
+# 创建虚拟环境
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# .venv\Scripts\activate   # Windows
 
-### 前端
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动服务
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+后端服务运行在 `http://127.0.0.1:8000`
+
+API 文档: `http://127.0.0.1:8000/docs`
+
+### 3. 启动前端应用
 
 ```bash
 cd frontend
 npm install
-npm run dev        # http://localhost:5173 （/api 已代理到后端 8000）
+npm run dev
 ```
 
-生产构建：`npm run build`，产物在 `frontend/dist`。
+前端访问地址: `http://localhost:5173`
 
-## API 文档
+## 📖 使用指南
 
-启动后端后访问 `http://127.0.0.1:8000/docs`（Swagger UI）可交互调试。
+### 1. 上传运动数据
+
+- 支持 `.fit` 格式文件（Garmin、Suunto、Polar 等设备导出）
+- 拖拽或点击上传，系统自动解析并生成分析报告
+
+### 2. 查看仪表盘
+
+- 每周运动数据总览
+- 训练强度趋势分析
+- 运动类型分布
+
+### 3. AI 私教对话
+
+- 基于你的完整运动档案智能问答
+- 个性化训练建议与方案
+- 训练数据深度分析
+
+### 4. 查看活动历史
+
+- 完整运动档案
+- 多维度筛选与排序
+- 详细数据查看
+
+### 5. 个人中心
+
+- 综合能力雷达图
+- 身体数据追踪
+- 成就里程碑
+- 年度目标管理
+
+## 📡 API 接口
 
 | 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查，返回 `{"status": "ok"}` |
-| POST | `/api/upload` | 上传 FIT 文件（multipart：`file`、`user_id`、`session_id`），返回活动 ID、metadata、features、recommendation、user_profile_summary |
-| GET | `/api/activities?user_id=xxx&limit=10` | 用户最近活动简要列表 |
-| GET | `/api/activities/{activity_id}` | 活动完整数据（metadata、features、recommendation 及重新解析的轨迹点 records） |
-| GET | `/api/user/profile?user_id=xxx` | 用户画像（含近 7/42 天平均训练负荷） |
+|-----|------|------|
+| POST | `/api/upload` | 上传 FIT 文件，返回活动 ID 与分析结果 |
+| GET | `/api/activities` | 获取活动列表 |
+| GET | `/api/activities/{id}` | 获取活动详情 |
+| GET | `/api/user/profile` | 获取用户画像 |
+| GET | `/api/chat` | AI 私教对话接口 |
+| GET | `/health` | 健康检查 |
 
-统一错误格式：`{"detail": "错误信息"}`，异常状态码：解析失败 400、资源不存在 404、其他 500。
-
-### POST /api/upload 示例
+### 上传示例
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/upload \
+curl -X POST http://localhost:8000/api/upload \
   -F "file=@activity.fit" \
-  -F "user_id=demo" \
-  -F "session_id=s1"
+  -F "user_id=your_user_id" \
+  -F "session_id=session_1"
 ```
 
-## 测试
+## 🧪 运行测试
 
 ```bash
-pytest tests/ -q          # 运行全部测试
-pytest tests/test_api.py -q   # 仅 API 测试
+# 后端测试
+pytest tests/ -v
+
+# 前端构建
+cd frontend
+npm run build
 ```
 
-测试覆盖：
+## ⚙️ 环境变量
 
-- `test_health.py`：健康检查
-- `test_parser.py`：FIT 解析（含构造的合法 FIT 样例文件）
-- `test_features.py`：特征提取（心率区间、训练负荷、间歇训练识别）
-- `test_coordinator.py`：协调者编排、异常分级与降级
-- `test_memory.py`：SQLite 持久化、短期缓存 TTL
-- `test_recommendation.py`：规则引擎与 LLM 降级
-- `test_api.py`：REST 路由（上传、列表、详情、画像、错误处理）
-- `test_e2e.py`：端到端全链路（上传→列表→详情→画像）
+| 变量 | 描述 | 默认值 |
+|-----|------|--------|
+| `FIT_APP_DB` | SQLite 数据库路径 | `app.db` |
+| `FIT_UPLOAD_DIR` | 上传文件保存目录 | 系统临时目录 |
+| `OPENAI_API_KEY` | LLM API Key（可选） | - |
+| `CHROMA_PERSIST_DIR` | ChromaDB 持久化路径 | `./chroma_data` |
 
-## 演示说明
+## 📝 开发路线图
 
-1. 分别启动后端（`uvicorn app.main:app --port 8000`）与前端（`npm run dev`）
-2. 打开 `http://localhost:5173`
-3. 在首页拖拽或点击上传 `.fit` 文件，填写用户 ID（或使用默认值），点击「上传并分析」
-4. 自动跳转活动详情页，展示：
-   - 指标卡片：运动类型、日期、总距离、总时长、平均配速、心率、爬升、训练负荷、恢复天数、心率区间占比
-   - 轨迹地图（Leaflet）：起点/终点标注与路线折线
-   - 训练建议：恢复天数、目标心率区间与配速区间
-   - 训练图表（Recharts）：心率、配速、海拔时序曲线（Tab 切换）
-5. 再次上传同一用户的新活动，可在详情/列表中看到历史活动与画像累积
+- [x] FIT 文件解析
+- [x] 特征提取与计算
+- [x] 多智能体协调架构
+- [x] 用户画像管理
+- [x] RAG 向量检索
+- [x] AI 私教对话
+- [x] 仪表盘重构
+- [x] 运动历史管理
+- [ ] 移动端适配优化
+- [ ] 多语言支持
+- [ ] 数据导出功能
 
-> 注：示例 FIT 文件可由 `tests/fit_gen.py` 生成（`python -c "from tests.fit_gen import generate_fit; generate_fit('/tmp/demo.fit', n_records=300)"`）。
+## 📄 开源协议
+
+本项目基于 MIT 协议开源，欢迎 Fork、Star 和贡献代码！
+
+---
+
+**WenYaSports** — 让每一次运动都有迹可循，让每一份数据都有价值。
