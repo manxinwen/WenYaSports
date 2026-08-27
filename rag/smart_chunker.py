@@ -125,6 +125,44 @@ class SmartChunker:
         )
         return chunks
 
+    def chunk_directory(
+        self,
+        directory_path: str,
+        supported_suffixes: Optional[set] = None,
+    ) -> List[Chunk]:
+        """遍历目录下所有支持的文档并切块。
+
+        Args:
+            directory_path: 文档目录
+            supported_suffixes: 支持的文件后缀（默认 .md/.txt/.pdf）
+
+        Returns:
+            所有文件的 Chunk 列表
+        """
+        if supported_suffixes is None:
+            supported_suffixes = {".md", ".txt", ".pdf"}
+
+        root = Path(directory_path)
+        if not root.is_dir():
+            raise NotADirectoryError(directory_path)
+
+        all_chunks: List[Chunk] = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in supported_suffixes:
+                continue
+            try:
+                file_chunks = self.chunk_file(str(path))
+                all_chunks.extend(file_chunks)
+                logger.info(
+                    "切块 %s: %d 个片段 (mode=%s)",
+                    path.name, len(file_chunks), self.mode,
+                )
+            except Exception as exc:
+                logger.warning("切块失败，已跳过 %s: %s", path, exc)
+                continue
+
+        return all_chunks
+
     def chunk_text(
         self,
         text: str,

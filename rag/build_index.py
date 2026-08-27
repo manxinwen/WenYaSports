@@ -15,21 +15,57 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
 def build_index(data_dir: str, chroma_dir: str, embedder_kind: str = "fake") -> None:
-    from rag.document_loader import load_documents_from_directory
     from rag.embedder import FakeEmbedder, MiniLMEmbedder
+    from rag.smart_chunker import SmartChunker
     from rag.vector_store import VectorStoreManager
+    from pathlib import Path
 
-    documents = load_documents_from_directory(data_dir)
-    if not documents:
-        logging.warning("未在 %s 找到任何文档", data_dir)
+    data_path = Path(data_dir)
+    if not data_path.is_dir():
+        logging.warning("目录不存在: %s", data_dir)
         return
+
+    # 使用 SmartChunker 智能切块
+    chunker = SmartChunker(mode="auto")
+    chunks = chunker.chunk_directory(str(data_path))
+    if not chunks:
+        logging.warning("未在 %s 找到任何可切分的文档", data_dir)
+        return
+
+    # 构建 Document 列表
+    from rag.document_loader import Document
+    documents = []
+    for chunk in chunks:
+        documents.append(Document(
+            page_content=chunk.content,
+            metadata={
+                "source": chunk.metadata.get("source", "unknown"),
+                "chunk_index": chunk.chunk_index,
+                "category": chunk.metadata.get("category", "general"),
+                "category_name": chunk.metadata.get("category", "general"),
+                "semantic_density": chunk.metadata.get("semantic_density", 0),
+                "mode": chunk.metadata.get("mode", "unknown"),
+                "token_count": chunk.metadata.get("token_count", 0),
+                "char_count": chunk.metadata.get("char_count", len(chunk.content)),
+            },
+        ))
 
     embedder = (
         MiniLMEmbedder() if embedder_kind == "minilm" else FakeEmbedder()
     )
     store = VectorStoreManager(persist_dir=chroma_dir, embedder=embedder)
     store.add_documents(documents, embedder)
-    logging.info("索引完成，共写入 %d 个片段到 %s", len(documents), chroma_dir)
+
+    stats = chunker.stats
+    logging.info(
+        "索引完成，共写入 %d 个片段到 %s | "
+        "chunker_mode=%s, avg_size=%.0f, std_dev=%.0f, outlier=%d/%d, "
+        "domain_terms_preserved=%d",
+        len(documents), chroma_dir,
+        chunker.mode, stats.avg_chunk_size, stats.std_dev,
+        stats.outlier_chunks, stats.total_chunks,
+        stats.domain_terms_preserved,
+    )
 
 
 def main() -> None:

@@ -193,36 +193,37 @@ class KnowledgeBaseService:
     ) -> int:
         """将单个文件向量化并写入 ChromaDB。
 
+        使用 SmartChunker 进行智能切块（章节感知/语义段落/动态颗粒度）。
+
         Returns:
             切分的 chunk 数量
         """
-        from rag.document_loader import Document, _read_pdf, _read_text, _split_chunks
         from rag.embedder import FakeEmbedder, MiniLMEmbedder
+        from rag.smart_chunker import SmartChunker
         from rag.vector_store import VectorStoreManager
 
-        # 读取文件
-        path = Path(file_path)
-        if path.suffix.lower() == ".pdf":
-            text = _read_pdf(path)
-        else:
-            text = _read_text(path)
-
-        # 切分
-        chunks = _split_chunks(text.strip())
+        # 使用 SmartChunker 智能切块
+        chunker = SmartChunker(mode="auto")
+        chunks = chunker.chunk_file(file_path)
         if not chunks:
             raise ValueError("文件内容为空，无法切分")
 
         # 构建 Document 列表
+        from rag.document_loader import Document
         documents = []
-        for idx, chunk in enumerate(chunks):
+        for chunk in chunks:
             documents.append(Document(
-                page_content=chunk.strip(),
+                page_content=chunk.content,
                 metadata={
                     "source": file_path,
-                    "chunk_index": idx,
+                    "chunk_index": chunk.chunk_index,
                     "file_id": file_id,
                     "category": category,
                     "category_name": category,
+                    "semantic_density": chunk.metadata.get("semantic_density", 0),
+                    "mode": chunk.metadata.get("mode", "unknown"),
+                    "token_count": chunk.metadata.get("token_count", 0),
+                    "char_count": chunk.metadata.get("char_count", len(chunk.content)),
                 },
             ))
 
@@ -240,8 +241,12 @@ class KnowledgeBaseService:
         )
 
         logger.info(
-            "向量化完成: file=%s, chunks=%d, category=%s",
+            "向量化完成: file=%s, chunks=%d, category=%s, chunker_mode=%s, "
+            "avg_size=%.0f, density>0=%d",
             file_id, len(chunks), category,
+            chunker.mode,
+            chunker.stats.avg_chunk_size,
+            chunker.stats.domain_terms_preserved,
         )
         return len(chunks)
 
