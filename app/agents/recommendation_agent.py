@@ -40,7 +40,8 @@ class RecommendationAgent(BaseAgent):
     agent_name = "Recommendation Engine"
     capabilities = ["training_advice", "rule_engine", "llm_generation"]
 
-    def __init__(self, llm_enabled: bool = True, openai_api_key: Optional[str] = None):
+    def __init__(self, llm_enabled: bool = True, openai_api_key: Optional[str] = None, name: Optional[str] = None, trace_collector=None):
+        super().__init__(name=name, trace_collector=trace_collector)
         self.llm_enabled = llm_enabled
         self.openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
 

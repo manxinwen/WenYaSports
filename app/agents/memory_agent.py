@@ -31,7 +31,8 @@ class MemoryAgent(BaseAgent):
     agent_name = "Memory Manager"
     capabilities = ["user_profile", "context_retrieval", "memory_update"]
 
-    def __init__(self, db_path: Optional[str] = None, short_term_ttl: int = DEFAULT_TTL):
+    def __init__(self, db_path: Optional[str] = None, short_term_ttl: int = DEFAULT_TTL, name: Optional[str] = None, trace_collector=None):
+        super().__init__(name=name, trace_collector=trace_collector)
         self.short_term_cache = TTLCache(maxsize=MAX_CACHE_SIZE, ttl=short_term_ttl)
         self.db_path = db_path
         database.init_db(db_path)

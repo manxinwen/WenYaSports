@@ -224,13 +224,14 @@ class BaseAgent(ABC):
             thought: Agent's reasoning
             session_id: Current session (uses "default" if not specified)
         """
-        self._trace_collector.add_step(
-            session_id=session_id or "default",
-            agent_name=self.agent_id,
-            step_type=step_type,
-            detail=detail,
-            thought=thought,
-        )
+        if self._trace_collector is not None:
+            self._trace_collector.add_step(
+                session_id=session_id or "default",
+                agent_name=self.agent_id,
+                step_type=step_type,
+                detail=detail,
+                thought=thought,
+            )
 
     def get_status(self) -> Dict[str, Any]:
         """Get current agent status."""

@@ -27,7 +27,8 @@ class CoordinatorError(Exception):
 class CoordinatorAgent(BaseAgent):
     """Orchestrates parsing, feature extraction, memory and recommendation."""
 
-    def __init__(self, parser_agent, feature_agent, memory_agent, recommendation_agent):
+    def __init__(self, parser_agent, feature_agent, memory_agent, recommendation_agent, name: Optional[str] = None, trace_collector=None):
+        super().__init__(name=name, trace_collector=trace_collector)
         self.parser_agent = parser_agent
         self.feature_agent = feature_agent
         self.memory_agent = memory_agent
