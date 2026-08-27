@@ -533,3 +533,120 @@ def get_governance_state():
     """Get governance engine state and budget tracking."""
     harness = get_harness()
     return harness.governance.get_stats()
+
+
+# ----------------------------------------------------------------------
+# MCP Server Endpoints
+# ----------------------------------------------------------------------
+_mcp_server = None
+_mcp_registry = None
+
+
+def _get_mcp_server():
+    global _mcp_server
+    if _mcp_server is None:
+        from mcp_plugins import MCPServer, PluginManager
+
+        pm = PluginManager()
+        _mcp_server = MCPServer(
+            plugin_manager=pm,
+            server_name="WenYaSports-MCP",
+            server_version="1.0.0",
+        )
+    return _mcp_server
+
+
+def _get_mcp_registry():
+    global _mcp_registry
+    if _mcp_registry is None:
+        from mcp_plugins import MCPRegistry, PluginManager
+
+        _mcp_registry = MCPRegistry()
+        pm = PluginManager()
+        _mcp_registry.set_plugin_manager(pm)
+    return _mcp_registry
+
+
+@router.post("/mcp")
+async def mcp_endpoint(request: dict):
+    """MCP HTTP 端点：接收 JSON-RPC 请求。
+
+    支持 MCP 协议的 initialize、tools/list、tools/call 等方法。
+    """
+    server = _get_mcp_server()
+    return server.handle_http_request(request)
+
+
+@router.get("/mcp/tools")
+def mcp_list_tools():
+    """列出所有 MCP 工具（本地插件 + 远程服务器）。"""
+    registry = _get_mcp_registry()
+    return {
+        "total_tools": len(registry.get_all_tools()),
+        "tools": registry.get_all_tools(),
+    }
+
+
+@router.post("/mcp/tools/call")
+def mcp_call_tool(body: dict):
+    """通过统一接口调用任意 MCP 工具。
+
+    Body: {tool_name, arguments}
+    """
+    tool_name = body.get("tool_name", "")
+    arguments = body.get("arguments", {})
+
+    if not tool_name:
+        raise HTTPException(status_code=400, detail="tool_name is required")
+
+    registry = _get_mcp_registry()
+    result = registry.call_tool(tool_name, arguments)
+    return result
+
+
+@router.post("/mcp/servers/connect")
+def mcp_connect_server(body: dict):
+    """连接远程 MCP Server。
+
+    Body: {server_name, transport: "stdio"|"sse", command|url}
+    """
+    server_name = body.get("server_name", "")
+    transport = body.get("transport", "sse")
+
+    if not server_name:
+        raise HTTPException(status_code=400, detail="server_name is required")
+
+    registry = _get_mcp_registry()
+
+    try:
+        if transport == "stdio":
+            command = body.get("command", [])
+            client = registry.connect_remote_stdio(server_name, command)
+        elif transport == "sse":
+            url = body.get("url", "")
+            client = registry.connect_remote_sse(server_name, url)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown transport: {transport}")
+
+        return {
+            "success": True,
+            "server_name": server_name,
+            "tools": [t.to_dict() for t in client.list_tools()],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.delete("/mcp/servers/{server_name}")
+def mcp_disconnect_server(server_name: str):
+    """断开远程 MCP Server。"""
+    registry = _get_mcp_registry()
+    registry.disconnect_remote(server_name)
+    return {"success": True, "server_name": server_name}
+
+
+@router.get("/mcp/registry/status")
+def mcp_registry_status():
+    """获取 MCP 注册表状态。"""
+    registry = _get_mcp_registry()
+    return registry.get_server_info()
