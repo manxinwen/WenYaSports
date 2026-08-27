@@ -1,33 +1,35 @@
-"""检索逻辑：query → 向量 → 相似度检索 → 片段列表。
+"""检索逻辑：query → 扩展 → 混合检索 → 重排序 → 片段列表。
 
-支持按分类 metadata filter 进行精准检索：
-  1. 从查询中提取类别关键词（如 "跑步" → endurance）
-  2. 优先在匹配分类内检索，若结果不足则扩展到全库
+完整的 RAG 检索管线：
+1. 查询扩展（同义词 + 领域术语）
+2. 元数据分类过滤
+3. 向量 + 关键词混合检索（RRF 融合）
+4. MMR 多样性重排
+5. 元数据规则重排
+6. 上下文丰富
 """
 
 import logging
-import re
 from typing import List, Optional
 
 from rag.config import TOP_K
 from rag.embedder import Embedder
+from rag.hybrid_retriever import HybridRetriever
 from rag.vector_store import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
-# 类别关键词映射（与 AutoClassifyAgent 保持一致）
-_CATEGORY_HINTS = {
-    "strength": ["力量", "力量训练", "力量训练", "strength", "power", "肌肉", "负重", "抗阻"],
-    "endurance": ["耐力", "有氧", "跑步", "长跑", "马拉松", "endurance", "aerobic", "pace", "配速"],
-    "nutrition": ["营养", "饮食", "蛋白质", "碳水", "补剂", "nutrition", "diet", "protein", "补水"],
-    "physiology": ["生理", "心率", "VO2", "血乳酸", "physiology", "heart rate", "代谢"],
-    "technique": ["技术", "姿势", "动作", "technique", "form", "跑姿", "步态"],
-    "sports_science": ["科学", "研究", "训练", "周期化", "sports science", "research"],
-}
-
 
 def _detect_query_categories(query: str) -> List[str]:
-    """从查询中检测可能的类别，用于 metadata filter。"""
+    """从查询中检测可能的类别。"""
+    _CATEGORY_HINTS = {
+        "strength": ["力量", "力量训练", "strength", "power", "肌肉", "负重", "抗阻", "增肌"],
+        "endurance": ["耐力", "有氧", "跑步", "长跑", "马拉松", "endurance", "aerobic", "配速", "跑步"],
+        "nutrition": ["营养", "饮食", "蛋白质", "碳水", "补剂", "nutrition", "diet", "protein", "补水", "减脂"],
+        "physiology": ["生理", "心率", "VO2", "血乳酸", "physiology", "heart rate", "代谢", "VO2max"],
+        "technique": ["技术", "姿势", "动作", "technique", "form", "跑姿", "步态", "拉伸"],
+        "sports_science": ["科学", "研究", "训练", "周期化", "sports science", "research", "恢复", "热身"],
+    }
     text_lower = query.lower()
     detected = []
     for cat, keywords in _CATEGORY_HINTS.items():
@@ -44,37 +46,39 @@ def retrieve_context(
     vector_store_manager: VectorStoreManager,
     top_k: int = TOP_K,
     categories: Optional[List[str]] = None,
+    use_hybrid: bool = True,
 ) -> List[dict]:
-    """检索与 query 语义相关的知识片段。
+    """完整的混合检索管线。
 
-    支持两类分类过滤:
-    1. 显式传入 categories 参数（管理员手动指定）
-    2. 自动检测查询中的类别关键词
+    Args:
+        query: 用户查询
+        embedder: 嵌入模型
+        vector_store_manager: 向量存储
+        top_k: 返回数量
+        categories: 显式分类过滤
+        use_hybrid: 是否使用混合检索
 
-    :param categories: 显式分类过滤器。
-    :return: ``[{"content", "source", "chunk_index", "distance"}]``，无匹配返回 []。
+    Returns:
+        排序后的结果列表
     """
-    query_embedding = embedder.embed_query(query)
-
     # 确定分类过滤器
     filter_categories = categories
     if not filter_categories:
         filter_categories = _detect_query_categories(query)
 
-    # 如果检测到分类，尝试在分类内检索
-    if filter_categories:
-        try:
-            results = vector_store_manager.retrieve_with_filter(
-                query_embedding, top_k=top_k, categories=filter_categories
-            )
-            if results:
-                logger.info(
-                    "分类过滤检索: categories=%s, results=%d",
-                    filter_categories, len(results),
-                )
-                return results
-        except Exception as e:
-            logger.warning("分类过滤检索失败，回退到全库: %s", e)
-
-    # 回退：全库检索
-    return vector_store_manager.retrieve(query_embedding, top_k=top_k)
+    if use_hybrid:
+        # 使用混合检索引擎
+        retriever = HybridRetriever(vector_store_manager, embedder)
+        return retriever.search(
+            query=query,
+            categories=filter_categories if filter_categories else None,
+            top_k=top_k,
+        )
+    else:
+        # 纯向量检索（降级）
+        query_embedding = embedder.embed_query(query)
+        return vector_store_manager.retrieve_with_filter(
+            query_embedding,
+            top_k=top_k,
+            categories=filter_categories if filter_categories else None,
+        )
