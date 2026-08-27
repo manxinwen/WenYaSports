@@ -5,19 +5,29 @@
 - 支持能力匹配、故障重规划、多策略降级
 - 完整的可观测性追踪
 - Planner-Executor-Reviser 多角色对话协作
+- Agentic Workflow: 自主思考、动态选工具、反思循环
+- 三层决策架构: 战略/战术/验证
 
 Architecture:
     User Request
         ↓
-    ┌──────────────────────┐
-    │  LLMOrchestrator     │
-    │  - Intent Analysis   │
-    │  - Plan Generation   │
-    │  - Dynamic Routing   │
-    │  - Re-planning       │
-    └──────────────────────┘
+    ┌──────────────────────────────────┐
+    │   AgenticWorkflowEngine          │
+    │   ┌──────────────────────────┐   │
+    │   │  DecisionEngine (LLM)    │   │
+    │   │  - Strategic Decision    │   │
+    │   │  - Tactical Decision     │   │
+    │   │  - Validation (Critique) │   │
+    │   └──────────────────────────┘   │
+    │   ┌──────────────────────────┐   │
+    │   │  Execution Engine        │   │
+    │   │  - Tool Chain            │   │
+    │   │  - Error Recovery        │   │
+    │   │  - Result Fusion         │   │
+    │   └──────────────────────────┘   │
+    └──────────────────────────────────┘
         ↓         ↓         ↓
-    Agent A    Agent B    Agent C
+    Agent A    Agent B    MCP Tools
 
     Conversation Mode:
     User → Planner → Executor → Reviser → [Iterate] → Final Answer
@@ -30,12 +40,42 @@ from app.orchestrator.conversation import (
     ConversationState,
     ConversationMessage,
 )
+from app.orchestrator.agentic_workflow import (
+    AgenticWorkflowEngine,
+    WorkflowState,
+    WorkflowStatus,
+    ToolCall,
+    ThoughtNode,
+)
+from app.orchestrator.decision_engine import (
+    LLMDecisionEngine,
+    DecisionResult,
+    CritiqueResult,
+    DebateResult,
+    DecisionLayer,
+    DecisionType,
+)
 
 __all__ = [
+    # Legacy orchestrator
     "LLMOrchestrator",
     "PlanStep",
     "ExecutionPlan",
+    # Conversation mode
     "ConversationOrchestrator",
     "ConversationState",
     "ConversationMessage",
+    # Agentic workflow
+    "AgenticWorkflowEngine",
+    "WorkflowState",
+    "WorkflowStatus",
+    "ToolCall",
+    "ThoughtNode",
+    # Decision engine
+    "LLMDecisionEngine",
+    "DecisionResult",
+    "CritiqueResult",
+    "DebateResult",
+    "DecisionLayer",
+    "DecisionType",
 ]
