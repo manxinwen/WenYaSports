@@ -9,6 +9,7 @@ from cachetools import TTLCache
 
 from app.agents.base_agent import BaseAgent
 from app.db import database
+from app.memory.memory_pool import get_memory_pool
 from app.models.features import ActivityFeatures
 from app.models.recommendation import Recommendation
 
@@ -21,10 +22,15 @@ DEFAULT_TTL = 1800  # 30 minutes
 class MemoryAgent(BaseAgent):
     """Manages short-term session context and long-term user memory.
 
+    Supports multi-layer memory:
+    - Short-term: TTLCache for session context
+    - Long-term: SQLite for user profiles and activity history
+    - Hierarchical: MemoryPool for Working/Episodic/Semantic memory
+
     Supports Harness integration for:
     - Trace recording for observability
     - Message-based communication with other agents
-    - Blackboard data sharing
+    - Blackboard data sharing (user-scoped namespaces)
     """
 
     agent_id = "memory"
@@ -94,10 +100,26 @@ class MemoryAgent(BaseAgent):
 
         profile = database.get_user_profile(user_id, self.db_path) or {}
         recent_load_7d = self._sum_load_since(user_id, days=7)
+
+        # Also load from hierarchical memory pool if available
+        pool = get_memory_pool()
+        memory_context = {}
+        try:
+            episodic_results = pool.retrieve(
+                user_id=user_id, query="", level="episodic", top_k=3
+            )
+            if episodic_results:
+                memory_context["recent_episodes"] = [
+                    r.get("content", "") for r in episodic_results[:3]
+                ]
+        except Exception:
+            pass
+
         return {
             "user_profile": profile,
             "recent_load_7d": recent_load_7d,
             "short_term_context": {},
+            "memory_context": memory_context,
         }
 
     def update(
@@ -109,7 +131,7 @@ class MemoryAgent(BaseAgent):
         metadata: Optional[dict] = None,
         file_path: Optional[str] = None,
     ) -> None:
-        """Persist the activity and refresh profile + short-term cache."""
+        """Persist the activity and refresh profile + short-term cache + hierarchical memory."""
         self._trace_step(
             step_type="thought",
             thought=f"持久化活动数据: user_id={user_id}",
@@ -141,6 +163,27 @@ class MemoryAgent(BaseAgent):
         profile.update({"avg_load_7d": load_7d, "avg_load_42d": load_42d})
         database.save_user_profile(user_id, profile, self.db_path)
 
+        # Update hierarchical memory pool (episodic memory)
+        pool = get_memory_pool()
+        try:
+            pool.store(
+                user_id=user_id,
+                content=f"完成{features.total_distance_m/1000:.1f}km运动，配速{features.pace_min_per_km:.1f}min/km，训练负荷{features.training_load:.1f}",
+                level="episodic",
+                metadata={
+                    "date": now.isoformat(),
+                    "sport": metadata.get("sport", "running") if metadata else "running",
+                    "distance_km": round(features.total_distance_m / 1000, 1),
+                    "training_load": features.training_load,
+                    "session_id": session_id,
+                },
+                topic="activity_completed",
+                agents=["parser", "feature_extractor", "memory"],
+                outcome="activity_analyzed",
+            )
+        except Exception as exc:
+            logger.warning("Failed to store episodic memory for user %s: %s", user_id, exc)
+
         # Update short-term (session) memory
         self.short_term_cache[session_id] = {
             "user_profile": profile,
@@ -159,13 +202,15 @@ class MemoryAgent(BaseAgent):
                 "avg_load_7d": load_7d,
                 "avg_load_42d": load_42d,
                 "cache_updated": True,
+                "hierarchical_memory_updated": True,
             },
         )
 
         if self.blackboard:
+            # Use user-scoped namespace for multi-tenant isolation
             self.write_to_blackboard(
-                namespace="memory_state",
-                key=f"user_{user_id}",
+                namespace=f"user_{user_id}.memory",
+                key="state",
                 value={
                     "avg_load_7d": load_7d,
                     "avg_load_42d": load_42d,

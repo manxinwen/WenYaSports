@@ -1,6 +1,9 @@
-"""FIT file parsing service."""
+"""FIT/CSV file parsing service."""
 
+import csv
 import logging
+import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import fitparse
@@ -161,3 +164,78 @@ def parse_fit_file(file_path: str) -> dict:
 
     metadata = _build_metadata(session, records)
     return {"metadata": metadata, "records": records}
+
+
+def parse_csv_file(file_path: str) -> dict:
+    """Parse a CSV activity file and return {'metadata': ..., 'records': [...]}."""
+    records: List[dict] = []
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rec = {}
+                try:
+                    ts_str = row.get("timestamp", "")
+                    if ts_str:
+                        rec["timestamp"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    else:
+                        rec["timestamp"] = None
+
+                    lat = row.get("latitude")
+                    if lat:
+                        rec["lat"] = float(lat)
+
+                    lon = row.get("longitude")
+                    if lon:
+                        rec["lon"] = float(lon)
+
+                    alt = row.get("altitude_m")
+                    if alt:
+                        rec["alt"] = float(alt)
+
+                    speed = row.get("speed_mps")
+                    if speed:
+                        rec["speed"] = float(speed)
+
+                    hr = row.get("heart_rate_bpm")
+                    if hr:
+                        rec["hr"] = int(hr)
+
+                    distance = row.get("cumulative_distance_km")
+                    if distance:
+                        rec["distance"] = float(distance) * 1000
+
+                    power = row.get("power_watts")
+                    if power:
+                        rec["power"] = float(power)
+
+                    if rec.get("timestamp"):
+                        records.append(rec)
+                except (ValueError, KeyError) as exc:
+                    logger.warning("跳过 CSV 行 %s: %s", row, exc)
+                    continue
+
+    except Exception as exc:
+        logger.exception("CSV文件解析失败: %s", file_path)
+        raise FitParseError(f"解析CSV文件失败: {exc}") from exc
+
+    if not records:
+        raise FitParseError("CSV文件中没有可用的数据行")
+
+    session: dict = {"sport": "running", "start_time": records[0]["timestamp"]}
+
+    metadata = _build_metadata(session, records)
+    return {"metadata": metadata, "records": records}
+
+
+def parse_activity_file(file_path: str) -> dict:
+    """Parse an activity file (FIT or CSV) and return standardized data."""
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".fit":
+        return parse_fit_file(file_path)
+    elif ext == ".csv":
+        return parse_csv_file(file_path)
+    else:
+        raise FitParseError(f"不支持的文件格式: {ext}，仅支持 .fit 和 .csv")

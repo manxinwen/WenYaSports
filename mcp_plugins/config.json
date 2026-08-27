@@ -14,6 +14,34 @@
             "config": {
                 "api_key": "YOUR_MAPBOX_TOKEN"
             }
+        },
+        {
+            "name": "strava",
+            "enabled": true,
+            "config": {
+                "client_id": "",
+                "client_secret": "",
+                "access_token": "",
+                "refresh_token": "",
+                "auto_refresh": true
+            }
+        },
+        {
+            "name": "sports_venues",
+            "enabled": true,
+            "config": {
+                "api_key": "YOUR_AMAP_KEY",
+                "default_city": "北京",
+                "default_radius": 5000
+            }
+        },
+        {
+            "name": "social_share",
+            "enabled": true,
+            "config": {
+                "site_url": "https://wenyasports.local",
+                "default_platform": "weibo"
+            }
         }
     ]
 }

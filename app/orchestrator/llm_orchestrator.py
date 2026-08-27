@@ -6,11 +6,16 @@
 3. 计划生成：生成包含主计划 + 降级计划的完整执行方案
 4. 动态重规划：执行失败时，LLM 自动调整策略
 5. 可观测性：每一步推理都被 Trace Collector 记录
+6. 质量闭环：Evaluator 评估产出 → Reflection 反思失败 → Guardrails 守卫输出
+7. Agent 协商：多 Agent 能力争议通过协商协议解决
+8. 决策可解释：每个决策都生成人类可读的解释
 
 设计理念：
 - Agent 是「能力提供者」，声明自己能做什么
 - Orchestrator 是「智能项目经理」，根据需求选择和编排 Agent
 - LLM 负责「思考」，Harness 负责「执行」，Governance 负责「守门」
+- Evaluator 负责「质检」，Reflection 负责「学习」，Guardrails 负责「安全」
+- Negotiation 负责「协作」，Explainability 负责「透明」
 """
 
 from __future__ import annotations
@@ -21,8 +26,23 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from app.agents.evaluator_agent import EvaluatorAgent
+from app.agents.guardrails import Guardrails
+from app.agents.reflection_engine import ReflectionEngine
 from app.harness.harness import Harness
 from app.harness.agent_registry import AgentStatus
+from app.orchestrator.negotiation import (
+    AgentProposal,
+    NegotiationResult,
+    NegotiationSession,
+    NegotiationType,
+    ProposalRank,
+)
+from app.orchestrator.explainability import (
+    DecisionRecord,
+    ExplainabilityEngine,
+    ExplainabilityType,
+)
 from app.orchestrator.plan_parser import (
     ExecutionPlan,
     PlanStep,
@@ -110,6 +130,13 @@ class LLMOrchestrator:
         model: str = "gpt-4o-mini",
         max_replanning: int = 3,
         trace_collector_instance=None,
+        evaluator: Optional[EvaluatorAgent] = None,
+        reflection_engine: Optional[ReflectionEngine] = None,
+        guardrails: Optional[Guardrails] = None,
+        quality_threshold: float = 6.0,
+        enable_quality_loop: bool = True,
+        enable_negotiation: bool = True,
+        enable_explainability: bool = True,
     ):
         self.harness = harness
         self.llm_client = llm_client
@@ -118,6 +145,25 @@ class LLMOrchestrator:
         self._trace = trace_collector_instance or trace_collector
         self._planning_count = 0
         self._replan_count = 0
+
+        # 质量闭环组件（可选注入）
+        self.evaluator = evaluator or EvaluatorAgent(llm_enabled=False)
+        self.reflection_engine = reflection_engine
+        self.guardrails = guardrails or Guardrails()
+        self.quality_threshold = quality_threshold
+        self.enable_quality_loop = enable_quality_loop
+        self._quality_check_count = 0
+        self._quality_fail_count = 0
+
+        # Agent 协商协议
+        self.enable_negotiation = enable_negotiation
+        self._negotiation_count = 0
+        self._negotiation_success = 0
+
+        # 决策可解释层
+        self.enable_explainability = enable_explainability
+        self.explainability_engine = ExplainabilityEngine()
+        self._decision_count = 0
 
     # ------------------------------------------------------------------
     # 核心入口
@@ -160,6 +206,17 @@ class LLMOrchestrator:
         # Phase 1: 生成执行计划
         plan = self._generate_plan(goal, initial_input, session)
 
+        # 记录计划生成决策（可解释性）
+        if self.enable_explainability:
+            self.explainability_engine.record_decision(
+                decision_type=ExplainabilityType.PLAN_GENERATION,
+                context={"goal": goal, "session_id": session},
+                chosen_option=plan.plan_id if hasattr(plan, "plan_id") else "dynamic_plan",
+                reasoning=f"LLM 生成 {len(plan.steps)} 步执行计划",
+                metadata={"steps_count": len(plan.steps)},
+            )
+            self._decision_count += 1
+
         if plan.is_empty():
             self._trace.add_step(
                 session_id=session,
@@ -181,6 +238,10 @@ class LLMOrchestrator:
         result = self._execute_plan_with_replan(
             plan, goal, initial_input, session, user_id
         )
+
+        # Phase 3: 质量闭环（可选）
+        if self.enable_quality_loop and result.get("success"):
+            result = self._run_quality_loop(result, goal, session, user_id)
 
         self._trace.record_session_end(
             session_id=session,
@@ -435,22 +496,56 @@ class LLMOrchestrator:
             # Resolve input for this step
             step_args = self._resolve_agent_inputs(step, results_local)
 
+            # Agent 协商：如果有多个 Agent 声称具备相同能力，通过协商选出最优
+            resolved_agent_id = step.agent_id
+            if self.enable_negotiation:
+                negotiated = self._try_negotiate_agent(
+                    step.agent_id, step.reasoning or str(step_args), session_id
+                )
+                if negotiated and negotiated != step.agent_id:
+                    self._trace.add_step(
+                        session_id=session_id,
+                        agent_name="llm_orchestrator",
+                        step_type="thought",
+                        detail={
+                            "original_agent": step.agent_id,
+                            "negotiated_agent": negotiated,
+                        },
+                        thought=f"Agent 协商: {step.agent_id} → {negotiated}",
+                    )
+                    resolved_agent_id = negotiated
+
+            # 记录 Agent 选择决策（可解释性）
+            if self.enable_explainability and resolved_agent_id != step.agent_id:
+                self.explainability_engine.record_decision(
+                    decision_type=ExplainabilityType.AGENT_SELECTION,
+                    context={
+                        "step": step.step,
+                        "task": step.reasoning or f"step_{i}",
+                        "original_agent": step.agent_id,
+                    },
+                    chosen_option=resolved_agent_id,
+                    reasoning="通过协商协议选出更优 Agent",
+                    alternatives=[step.agent_id],
+                )
+                self._decision_count += 1
+
             self._trace.add_step(
                 session_id=session_id,
                 agent_name="llm_orchestrator",
                 step_type="action",
                 detail={
                     "step": step.step,
-                    "agent_id": step.agent_id,
+                    "agent_id": resolved_agent_id,
                     "output_key": step.output_key,
                     "reasoning": step.reasoning[:100],
                 },
-                thought=f"步骤 {step.step}: 委托 {step.agent_id} 执行 (args={list(step_args.keys())})",
+                thought=f"步骤 {step.step}: 委托 {resolved_agent_id} 执行 (args={list(step_args.keys())})",
             )
 
             # Execute via harness
             exec_result = self._execute_agent_with_args(
-                step.agent_id, step_args
+                resolved_agent_id, step_args
             )
 
             if not exec_result.get("success"):
@@ -561,6 +656,345 @@ class LLMOrchestrator:
             logger.exception("Agent execution failed: %s", exc)
             self.harness.registry.set_status(agent_id, "error")
             return {"success": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Agent Negotiation: 多 Agent 协商选择
+    # ------------------------------------------------------------------
+
+    def _try_negotiate_agent(
+        self,
+        primary_agent_id: str,
+        task_description: str,
+        session_id: str,
+    ) -> Optional[str]:
+        """尝试通过协商协议选择更优的 Agent。
+
+        场景：当有多个 Agent 声称具备同一能力时（如 feature_extractor
+        和 react 都能做特征提取），通过协商选出最合适的。
+
+        Args:
+            primary_agent_id: 主选 Agent
+            task_description: 任务描述
+            session_id: 会话 ID
+
+        Returns:
+            协商后选定的 Agent ID；如果无更优选择则返回 None
+        """
+        # 查找具备相同或相关能力的候选 Agent
+        candidates = self._find_capability_candidates(primary_agent_id)
+
+        if len(candidates) <= 1:
+            return None  # 没有其他候选，直接用主选
+
+        # 构建协商会话
+        session = NegotiationSession(
+            negotiation_type=NegotiationType.CAPABILITY_DISPUTE,
+            topic=f"能力协商: {task_description[:50]}",
+            max_rounds=2,
+        )
+        session.start_round()
+
+        # 为每个候选构建提案
+        for candidate_id in candidates:
+            descriptor = self.harness.registry.get_descriptor(candidate_id)
+            quality_score = 0.5
+            confidence = 0.5
+            reasoning = ""
+
+            if descriptor:
+                # 基于 Agent 描述符构建评分
+                capabilities = getattr(descriptor, 'capabilities', [])
+                execution_count = getattr(descriptor, 'execution_count', 0)
+                error_count = getattr(descriptor, 'error_count', 0)
+
+                # 计算置信度和质量分
+                if capabilities:
+                    confidence = min(1.0, len(capabilities) * 0.2 + 0.3)
+                if execution_count > 0:
+                    success_rate = max(0.0, 1.0 - error_count / max(execution_count, 1))
+                    quality_score = success_rate * 0.8 + 0.2
+
+                reasoning = f"能力: {', '.join(capabilities[:3])}" if capabilities else "通用 Agent"
+
+            proposal = AgentProposal(
+                agent_id=candidate_id,
+                capability=task_description[:30],
+                confidence=confidence,
+                quality_score=quality_score,
+                reasoning=reasoning,
+                arguments=[f"历史执行: {executions}次"] if executions > 0 else ["新 Agent"],
+            )
+            session.add_proposal(proposal)
+
+        # 执行协商
+        result = session.resolve(strategy="hybrid")
+        self._negotiation_count += 1
+
+        if result.success and result.winner_id != primary_agent_id:
+            self._negotiation_success += 1
+
+            # 记录协商决策
+            if self.enable_explainability:
+                self.explainability_engine.record_decision(
+                    decision_type=ExplainabilityType.NEGOTIATION,
+                    context={
+                        "topic": f"能力协商: {task_description[:50]}",
+                        "consensus_type": result.consensus_type,
+                        "session_id": session_id,
+                    },
+                    chosen_option=result.winner_id or primary_agent_id,
+                    reasoning=result.explanation,
+                    alternatives=[c for c in candidates if c != result.winner_id],
+                    scores=result.all_scores,
+                )
+                self._decision_count += 1
+
+            logger.info(
+                "Agent 协商结果: %s → %s (理由: %s)",
+                primary_agent_id, result.winner_id, result.explanation[:100],
+            )
+            return result.winner_id
+
+        return None
+
+    def _find_capability_candidates(
+        self, primary_agent_id: str
+    ) -> List[str]:
+        """查找具备相似能力的候选 Agent。
+
+        Args:
+            primary_agent_id: 主选 Agent ID
+
+        Returns:
+            候选 Agent ID 列表（包含主选）
+        """
+        candidates = [primary_agent_id]
+
+        # 获取主选 Agent 的能力
+        primary_descriptor = self.harness.registry.get_descriptor(primary_agent_id)
+        primary_capabilities = set()
+        if primary_descriptor:
+            primary_capabilities = set(
+                getattr(primary_descriptor, 'capabilities', [])
+            )
+
+        # 查找其他具备相同能力的 Agent
+        agent_list = self.harness.registry.list_agents()
+        for agent_entry in agent_list:
+            # list_agents 返回 Dict 列表，取 agent_id 字段
+            agent_id = (
+                agent_entry.get('agent_id')
+                if isinstance(agent_entry, dict)
+                else agent_entry
+            )
+            if not agent_id or agent_id == primary_agent_id:
+                continue
+
+            descriptor = self.harness.registry.get_descriptor(agent_id)
+            if not descriptor:
+                continue
+
+            agent_caps = set(getattr(descriptor, 'capabilities', []))
+            # 如果有能力重叠或 Agent 名称暗示相关能力
+            if agent_caps & primary_capabilities:
+                candidates.append(agent_id)
+            elif self._is_functionally_equivalent(agent_id, primary_agent_id):
+                candidates.append(agent_id)
+
+        return candidates
+
+    @staticmethod
+    def _is_functionally_equivalent(agent_id: str, target_id: str) -> bool:
+        """判断两个 Agent 是否功能等价（基于名称启发式）。
+
+        Args:
+            agent_id: 候选 Agent ID
+            target_id: 目标 Agent ID
+
+        Returns:
+            是否功能等价
+        """
+        # 功能等价的 Agent 对（frozenset 实现无序配对）
+        equivalent_pairs = [
+            frozenset({"feature_extractor_agent", "reaact_agent"}),
+            frozenset({"parser_agent", "reaact_agent"}),
+            frozenset({"memory_agent", "coordinator_agent"}),
+            frozenset({"recommendation_agent", "reaact_agent"}),
+            frozenset({"reaact_agent", "coordinator_agent"}),
+        ]
+
+        pair = frozenset({agent_id, target_id})
+        return pair in equivalent_pairs
+
+    def get_orchestrator_stats(self) -> Dict[str, Any]:
+        """获取 Orchestrator 统计信息。"""
+        stats = {
+            "planning_count": self._planning_count,
+            "replan_count": self._replan_count,
+            "negotiation_count": self._negotiation_count,
+            "negotiation_success": self._negotiation_success,
+            "decision_count": self._decision_count,
+            "quality_check_count": self._quality_check_count,
+            "quality_fail_count": self._quality_fail_count,
+            "enable_negotiation": self.enable_negotiation,
+            "enable_explainability": self.enable_explainability,
+        }
+
+        if self.enable_explainability:
+            explain_stats = self.explainability_engine.get_stats()
+            stats["explainability"] = explain_stats
+
+        return stats
+
+    def _run_quality_loop(
+        self,
+        result: Dict[str, Any],
+        goal: str,
+        session_id: str,
+        user_id: str,
+    ) -> Dict[str, Any]:
+        """执行质量闭环：评估 → 反思 → 守卫。
+
+        流程：
+        1. 从执行结果中提取最终产出文本
+        2. EvaluatorAgent 进行多维度质量评估
+        3. 若低于阈值，ReflectionEngine 分析失败原因
+        4. Guardrails 进行输出安全守卫
+        5. 返回增强后的结果
+
+        Args:
+            result: 执行结果
+            goal: 原始目标
+            session_id: 会话标识
+            user_id: 用户标识
+
+        Returns:
+            增强后的结果（含质量评估信息）
+        """
+        self._trace.add_step(
+            session_id=session_id,
+            agent_name="llm_orchestrator",
+            step_type="thought",
+            detail={"phase": "quality_loop"},
+            thought="启动质量闭环：Evaluator → Reflection → Guardrails",
+        )
+
+        # 提取最终产出
+        output_text = self._extract_output_text(result)
+        if not output_text:
+            return result
+
+        # 1. Evaluator 评估
+        self._quality_check_count += 1
+        eval_result = self.evaluator.evaluate(
+            output=output_text,
+            goal=goal,
+            context={"user_id": user_id},
+        )
+
+        self._trace.add_step(
+            session_id=session_id,
+            agent_name="llm_orchestrator",
+            step_type="observation",
+            detail={
+                "quality_score": eval_result.overall_score,
+                "passed": eval_result.passed,
+                "threshold": self.quality_threshold,
+            },
+            thought=f"质量评估: {eval_result.overall_score}/10 "
+                    f"{'通过' if eval_result.passed else '未通过'}",
+        )
+
+        result["quality_evaluation"] = eval_result.to_dict()
+
+        # 2. 若质量不达标，触发反思
+        if not eval_result.passed and self.reflection_engine:
+            self._quality_fail_count += 1
+            try:
+                reflection = self.reflection_engine.reflect_on_failure(
+                    task_type="analysis",
+                    original_goal=goal,
+                    execution_result=result,
+                    evaluation_feedback={
+                        "score": eval_result.overall_score,
+                        "issues": [d.comment for d in eval_result.dimensions
+                                   if d.score < self.quality_threshold],
+                        "suggestions": eval_result.suggestions,
+                    },
+                )
+                result["reflection"] = reflection.to_dict()
+
+                self._trace.add_step(
+                    session_id=session_id,
+                    agent_name="llm_orchestrator",
+                    step_type="thought",
+                    detail={
+                        "root_cause": reflection.root_cause[:100],
+                        "confidence": reflection.confidence,
+                    },
+                    thought=f"质量反思: 根因={reflection.root_cause[:50]}... "
+                            f"信心={reflection.confidence:.2f}",
+                )
+            except Exception as exc:
+                logger.warning("Reflection failed: %s", exc)
+
+        # 3. Guardrails 安全守卫
+        try:
+            guard_result = self.guardrails.guard(
+                output=output_text,
+                context={"user_id": user_id, "goal": goal},
+            )
+            result["guardrails"] = guard_result.to_dict()
+
+            if not guard_result.passed and guard_result.sanitized_output:
+                result["sanitized_output"] = guard_result.sanitized_output
+                self._trace.add_step(
+                    session_id=session_id,
+                    agent_name="llm_orchestrator",
+                    step_type="observation",
+                    detail={
+                        "sanitized": True,
+                        "issues": guard_result.issues,
+                    },
+                    thought=f"安全守卫: 检测到 {len(guard_result.issues)} 个问题，"
+                            f"输出已脱敏处理",
+                )
+        except Exception as exc:
+            logger.warning("Guardrails check failed: %s", exc)
+
+        # 添加质量统计
+        result["quality_stats"] = {
+            "total_checks": self._quality_check_count,
+            "failures": self._quality_fail_count,
+            "threshold": self.quality_threshold,
+        }
+
+        return result
+
+    def _extract_output_text(self, result: Dict[str, Any]) -> str:
+        """从执行结果中提取可评估的产出文本。"""
+        results_data = result.get("results", {})
+        if not results_data:
+            return ""
+
+        # 查找最终产出（通常是最后一个 output_key）
+        output_keys = [k for k in results_data.keys()
+                       if k not in ("_initial_input", "user_context")]
+        if not output_keys:
+            return ""
+
+        # 取最后一个非字典类型的结果作为产出
+        for key in reversed(output_keys):
+            value = results_data[key]
+            if isinstance(value, str) and len(value) > 10:
+                return value
+            elif isinstance(value, dict):
+                # 尝试从 dict 中提取 answer/response 字段
+                for field in ("answer", "response", "output", "result", "summary"):
+                    if field in value and isinstance(value[field], str):
+                        return value[field]
+
+        return ""
 
     # ------------------------------------------------------------------
     # Re-planning
@@ -758,4 +1192,9 @@ class LLMOrchestrator:
             "registered_agents": len(
                 self.harness.registry.list_agents()
             ),
+            "quality_loop_enabled": self.enable_quality_loop,
+            "quality_checks": self._quality_check_count,
+            "quality_failures": self._quality_fail_count,
+            "evaluator_stats": self.evaluator.get_stats(),
+            "guardrails_stats": self.guardrails.get_stats(),
         }

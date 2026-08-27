@@ -1,16 +1,16 @@
-"""ParserAgent: turns a FIT file path into a ParsedActivity."""
+"""ParserAgent: turns a FIT/CSV file path into a ParsedActivity."""
 
 import logging
 
 from app.agents.base_agent import BaseAgent
 from app.models.activity import ActivityMetadata, ActivityRecord, ParsedActivity
-from app.services.fit_parser import FitParseError, parse_fit_file
+from app.services.fit_parser import FitParseError, parse_activity_file
 
 logger = logging.getLogger(__name__)
 
 
 class ParserAgent(BaseAgent):
-    """Parses a FIT file into a ParsedActivity model.
+    """Parses activity files (FIT or CSV) into a ParsedActivity model.
 
     Supports Harness integration for:
     - Trace recording for observability
@@ -19,38 +19,39 @@ class ParserAgent(BaseAgent):
     """
 
     agent_id = "parser"
-    agent_name = "FIT Parser"
-    capabilities = ["fit_parsing", "data_extraction", "metadata_parsing"]
+    agent_name = "Activity Parser"
+    capabilities = ["fit_parsing", "csv_parsing", "data_extraction", "metadata_parsing"]
 
     def run(self, file_path: str) -> ParsedActivity:
         self._execution_count += 1
         self._last_input = file_path
 
+        ext = file_path.split(".")[-1].lower() if "." in file_path else "unknown"
         self._trace_step(
             step_type="thought",
-            thought=f"开始解析 FIT 文件: {file_path}",
-            detail={"file_path": file_path},
+            thought=f"开始解析活动文件 ({ext}): {file_path}",
+            detail={"file_path": file_path, "format": ext},
         )
 
         try:
-            data = parse_fit_file(file_path)
+            data = parse_activity_file(file_path)
         except FitParseError:
             self._last_error = str(FitParseError)
             self._trace_step(
                 step_type="final",
-                thought=f"FIT 解析失败",
+                thought=f"解析失败",
                 detail={"error": str(FitParseError)},
             )
             raise
         except Exception as exc:
-            logger.exception("解析FIT文件失败: %s", file_path)
+            logger.exception("解析活动文件失败: %s", file_path)
             self._last_error = str(exc)
             self._trace_step(
                 step_type="final",
                 thought=f"解析失败: {exc}",
                 detail={"error": str(exc)},
             )
-            raise FitParseError(f"解析FIT文件失败: {exc}") from exc
+            raise FitParseError(f"解析文件失败: {exc}") from exc
 
         self._trace_step(
             step_type="action",
@@ -119,7 +120,7 @@ class ParserAgent(BaseAgent):
 
         self._trace_step(
             step_type="final",
-            thought=f"FIT 解析成功: {metadata.total_distance_m:.1f}m, {metadata.total_duration_s:.0f}s",
+            thought=f"解析成功: {metadata.total_distance_m:.1f}m, {metadata.total_duration_s:.0f}s",
             detail={
                 "sport": metadata.sport,
                 "distance_m": metadata.total_distance_m,

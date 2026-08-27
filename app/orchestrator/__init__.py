@@ -7,6 +7,8 @@
 - Planner-Executor-Reviser 多角色对话协作
 - Agentic Workflow: 自主思考、动态选工具、反思循环
 - 三层决策架构: 战略/战术/验证
+- Agent 协商协议: 多 Agent 协作冲突解决
+- 决策可解释层: 所有决策透明可追溯
 
 Architecture:
     User Request
@@ -55,6 +57,25 @@ from app.orchestrator.decision_engine import (
     DecisionLayer,
     DecisionType,
 )
+from app.orchestrator.negotiation import (
+    NegotiationSession,
+    NegotiationType,
+    NegotiationStatus,
+    NegotiationResult,
+    NegotiationRound,
+    AgentProposal,
+    VoteRecord,
+    ProposalRank,
+    quick_delegate,
+    resolve_capability_dispute,
+)
+from app.orchestrator.explainability import (
+    ExplainabilityEngine,
+    ExplainabilityType,
+    DecisionRecord,
+    Explanation,
+    DecisionPath,
+)
 
 __all__ = [
     # Legacy orchestrator
@@ -78,4 +99,21 @@ __all__ = [
     "DebateResult",
     "DecisionLayer",
     "DecisionType",
+    # Negotiation protocol
+    "NegotiationSession",
+    "NegotiationType",
+    "NegotiationStatus",
+    "NegotiationResult",
+    "NegotiationRound",
+    "AgentProposal",
+    "VoteRecord",
+    "ProposalRank",
+    "quick_delegate",
+    "resolve_capability_dispute",
+    # Explainability
+    "ExplainabilityEngine",
+    "ExplainabilityType",
+    "DecisionRecord",
+    "Explanation",
+    "DecisionPath",
 ]

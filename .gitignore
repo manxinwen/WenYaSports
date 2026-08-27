@@ -30,3 +30,11 @@ Thumbs.db
 
 # Uploads
 fit_uploads/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.pdf
+*.synctex.gz
+missfont.log

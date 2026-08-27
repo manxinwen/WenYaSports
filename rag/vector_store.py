@@ -6,7 +6,7 @@
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from rag.config import CHROMA_COLLECTION, CHROMA_PERSIST_DIR, TOP_K
 from rag.document_loader import Document
@@ -22,7 +22,7 @@ class VectorStoreManager:
         self,
         persist_dir: str = CHROMA_PERSIST_DIR,
         collection_name: str = CHROMA_COLLECTION,
-        embedder: Embedder | None = None,
+        embedder: Optional[Embedder] = None,
     ):
         import chromadb
 
@@ -83,6 +83,52 @@ class VectorStoreManager:
                 }
             )
         return passages
+
+    def retrieve_with_filter(
+        self,
+        query_embedding: List[float],
+        top_k: int = TOP_K,
+        categories: Optional[List[str]] = None,
+    ) -> List[dict]:
+        """带分类 filter 的检索。
+
+        当给定 categories 时，仅在匹配分类内检索。
+        若 filter 结果不足，自动降级到全库检索。
+        """
+        if not categories:
+            return self.retrieve(query_embedding, top_k=top_k)
+
+        where_filter = {"category": {"$in": categories}}
+        try:
+            result = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                include=["documents", "metadatas", "distances"],
+                where=where_filter,
+            )
+            passages: List[dict] = []
+            docs = result.get("documents", [[]])[0] or []
+            metas = result.get("metadatas", [[]])[0] or []
+            dists = result.get("distances", [[]])[0] or []
+            for content, meta, dist in zip(docs, metas, dists):
+                passages.append(
+                    {
+                        "content": content,
+                        "source": (meta or {}).get("source", "未知来源"),
+                        "chunk_index": (meta or {}).get("chunk_index", 0),
+                        "distance": dist,
+                    }
+                )
+            # 如果 filter 结果太少，回退到全库
+            if len(passages) < 2:
+                logger.info(
+                    "分类过滤结果过少 (%d)，回退到全库检索", len(passages)
+                )
+                return self.retrieve(query_embedding, top_k=top_k)
+            return passages
+        except Exception as e:
+            logger.warning("带 filter 检索失败，回退到全库: %s", e)
+            return self.retrieve(query_embedding, top_k=top_k)
 
     def count(self) -> int:
         """返回 collection 中的片段数量。"""

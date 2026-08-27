@@ -13,13 +13,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from app.agents.coordinator_agent import CoordinatorAgent, CoordinatorError
 from app.db import database
 from app.harness_setup import get_harness, get_analysis_workflow, get_chat_workflow, get_llm_orchestrator
-from app.services.fit_parser import parse_fit_file
+from app.services.fit_parser import parse_activity_file
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-UPLOAD_DIR_DEFAULT = os.path.join(tempfile.gettempdir(), "fit_uploads")
+UPLOAD_DIR_DEFAULT = os.path.join(tempfile.gettempdir(), "wenyasports_uploads")
 
 
 def create_coordinator() -> CoordinatorAgent:
@@ -48,15 +48,49 @@ def get_coordinator() -> CoordinatorAgent:
     return _coordinator
 
 
-def _save_upload(file: UploadFile) -> str:
-    """Persist the uploaded file and return its path."""
-    upload_dir = os.environ.get("FIT_UPLOAD_DIR") or UPLOAD_DIR_DEFAULT
-    os.makedirs(upload_dir, exist_ok=True)
+def _get_user_upload_dir(user_id: str) -> str:
+    """获取用户专属上传目录。
+
+    结构: {UPLOAD_DIR}/{user_id}/
+
+    Args:
+        user_id: 用户唯一标识
+
+    Returns:
+        用户上传目录路径
+    """
+    base_dir = os.environ.get("FIT_UPLOAD_DIR") or UPLOAD_DIR_DEFAULT
+    user_dir = os.path.join(base_dir, f"user_{user_id}")
+    os.makedirs(user_dir, exist_ok=True)
+    return user_dir
+
+
+def _save_upload(file: UploadFile, user_id: Optional[str] = None) -> str:
+    """Persist the uploaded file and return its path.
+
+    如果提供 user_id，文件将存储到用户专属目录，确保数据隔离。
+
+    Args:
+        file: 上传的文件
+        user_id: 用户唯一标识（可选，用于目录隔离）
+
+    Returns:
+        保存后的文件路径
+    """
+    if user_id:
+        upload_dir = _get_user_upload_dir(user_id)
+    else:
+        upload_dir = os.environ.get("FIT_UPLOAD_DIR") or UPLOAD_DIR_DEFAULT
+        os.makedirs(upload_dir, exist_ok=True)
+
     safe_name = os.path.basename(file.filename or "upload.fit")
+    if not safe_name.lower().endswith((".fit", ".csv")):
+        safe_name += ".fit"
     file_path = os.path.join(upload_dir, f"{uuid.uuid4().hex}_{safe_name}")
     content = file.file.read()
     with open(file_path, "wb") as fh:
         fh.write(content)
+    logger.debug("File uploaded: user=%s, path=%s", user_id, file_path)
     return file_path
 
 
@@ -67,11 +101,14 @@ async def upload_fit(
     session_id: str = Form(...),
     coordinator: CoordinatorAgent = Depends(get_coordinator),
 ):
-    """Upload a FIT file, run the multi-agent pipeline and return results."""
-    if not file.filename or not file.filename.lower().endswith(".fit"):
-        raise HTTPException(status_code=400, detail="请上传 .fit 格式的运动文件")
+    """上传运动数据文件（.fit 或 .csv），运行多 Agent 分析管道并返回结果。
 
-    file_path = _save_upload(file)
+    文件存储到用户专属目录 {UPLOAD_DIR}/user_{user_id}/，确保数据隔离。
+    """
+    if not file.filename or not file.filename.lower().endswith((".fit", ".csv")):
+        raise HTTPException(status_code=400, detail="请上传 .fit 或 .csv 格式的运动文件")
+
+    file_path = _save_upload(file, user_id=user_id)
     try:
         result = coordinator.run(file_path, user_id, session_id)
     except CoordinatorError as exc:
@@ -133,12 +170,12 @@ def get_activity_detail(activity_id: int):
     file_path = row.get("file_path")
     if file_path and os.path.exists(file_path):
         try:
-            parsed = parse_fit_file(file_path)
+            parsed = parse_activity_file(file_path)
             records = parsed["records"]
             if not metadata:
                 metadata = parsed["metadata"]
         except Exception:
-            logger.warning("重新解析FIT文件失败: %s", file_path)
+            logger.warning("重新解析活动文件失败: %s", file_path)
             records = []
 
     return {
@@ -227,27 +264,100 @@ def get_agent_trace_detail(session_id: str):
 
 
 # ----------------------------------------------------------------------
-# Memory Inspector API
+# Memory Inspector API (基于 MemoryPool 的用户隔离记忆)
 # ----------------------------------------------------------------------
+
+from app.memory.memory_pool import get_memory_pool
+
+
 @router.get("/memory")
 def get_memory_state():
-    """Get current memory system state (for Memory Inspector UI)."""
-    return trace_collector.get_memory_state()
+    """获取记忆池全局状态（所有用户的记忆统计）。"""
+    pool = get_memory_pool()
+    pool_stats = pool.get_stats()
+    trace_state = trace_collector.get_memory_state()
+    return {
+        "pool": pool_stats,
+        "trace": trace_state,
+    }
+
 
 @router.post("/memory/search")
 def search_memory(body: dict):
-    """Search memory by query (simulated for demo)."""
+    """搜索指定用户的分级记忆系统（Working/Episodic/Semantic 三层）。
+
+    必须提供 user_id 以确保数据隔离。
+    """
+    user_id = body.get("user_id", "")
     query = body.get("query", "")
-    # In a real app, this would use the vector store.
-    # For now, we return simulated results based on the query.
-    results = [
-        {"content": "用户近一个月跑量增加 15%", "score": 0.95, "source": "user_profile"},
-        {"content": "用户最近 5 次配速稳定在 5:30", "score": 0.88, "source": "activity_features"},
-        {"content": "用户有两次全马经历，平均完赛时间 4:15:00", "score": 0.82, "source": "user_profile"},
-    ]
-    if query:
-        results = [r for r in results if query.lower() in r["content"].lower()]
-    return {"query": query, "results": results}
+    level = body.get("level", None)
+    top_k = body.get("top_k", 5)
+
+    if not user_id:
+        raise HTTPException(status_code=400, detail="必须提供 user_id 以搜索用户记忆")
+
+    pool = get_memory_pool()
+
+    try:
+        results = pool.retrieve(user_id=user_id, query=query, level=level, top_k=top_k)
+        formatted = []
+        for r in results:
+            formatted.append({
+                "content": r.get("content", ""),
+                "score": r.get("score", 0.0),
+                "source": r.get("level", "unknown"),
+                "metadata": r.get("metadata", {}),
+            })
+    except Exception as exc:
+        logger.error("记忆搜索失败: %s", exc)
+        formatted = []
+
+    if not formatted:
+        formatted = [
+            {"content": "暂无相关记忆记录。请先进行运动数据分析来积累记忆。", "score": 0.0, "source": "system", "metadata": {}}
+        ]
+
+    return {"user_id": user_id, "query": query, "results": formatted, "total": len(formatted)}
+
+
+@router.post("/memory/store")
+def store_memory(body: dict):
+    """为指定用户存储一条记忆。
+
+    Args:
+        body: {user_id, content, level?, metadata?}
+    """
+    user_id = body.get("user_id", "")
+    content = body.get("content", "")
+    level = body.get("level", "auto")
+    metadata = body.get("metadata", {})
+
+    if not user_id or not content:
+        raise HTTPException(status_code=400, detail="必须提供 user_id 和 content")
+
+    pool = get_memory_pool()
+    result = pool.store(user_id=user_id, content=content, level=level, metadata=metadata)
+    return {"status": "ok", "result": result}
+
+
+@router.delete("/memory/user/{user_id}")
+def clear_user_memory(user_id: str):
+    """清除指定用户的所有记忆。"""
+    pool = get_memory_pool()
+    success = pool.remove(user_id)
+    return {"user_id": user_id, "cleared": success}
+
+
+@router.get("/memory/user/{user_id}")
+def get_user_memory_stats(user_id: str):
+    """获取指定用户的记忆统计。"""
+    pool = get_memory_pool()
+    memory = pool.get(user_id)
+    if memory is None:
+        return {"user_id": user_id, "exists": False}
+
+    stats = memory.get_stats()
+    return {"user_id": user_id, "exists": True, "stats": stats}
 
 
 # ----------------------------------------------------------------------
@@ -650,3 +760,197 @@ def mcp_registry_status():
     """获取 MCP 注册表状态。"""
     registry = _get_mcp_registry()
     return registry.get_server_info()
+
+
+# ----------------------------------------------------------------------
+# Auth & Role Management
+# ----------------------------------------------------------------------
+from app.auth import (
+    authenticate, create_token, get_current_user,
+    require_admin, UserRole,
+)
+from app.auth.auth import AuthUser
+
+
+@router.post("/auth/login")
+def auth_login(body: dict):
+    """登录：返回 Token 和用户信息。
+
+    Body: {username, password}
+    管理员默认账号: admin / wenyasports2024
+    """
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+
+    if not username:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+
+    user = authenticate(username, password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    token = create_token(user)
+    return {
+        "token": token,
+        "user": user.to_dict(),
+        "expires_in": 3600,
+    }
+
+
+@router.get("/auth/me")
+def auth_me(user: AuthUser = Depends(get_current_user)):
+    """获取当前登录用户信息。"""
+    return user.to_dict()
+
+
+@router.get("/auth/categories")
+def auth_list_categories():
+    """获取支持的知识库分类列表。"""
+    from app.agents.auto_classify_agent import AutoClassifyAgent
+    agent = AutoClassifyAgent()
+    return {"categories": agent.get_supported_categories()}
+
+
+# ----------------------------------------------------------------------
+# Knowledge Base Management (Admin Only)
+# ----------------------------------------------------------------------
+from app.services.knowledge_base import KnowledgeBaseService
+
+_kb_service: KnowledgeBaseService = None
+
+
+def _get_kb_service() -> KnowledgeBaseService:
+    global _kb_service
+    if _kb_service is None:
+        _kb_service = KnowledgeBaseService()
+    return _kb_service
+
+
+@router.post("/knowledge/upload")
+async def knowledge_upload(
+    file: UploadFile = File(...),
+    force_category: Optional[str] = Form(None),
+    skip_index: bool = Form(False),
+    user: AuthUser = Depends(require_admin),
+):
+    """上传知识文件（管理员）。
+
+    自动调用 AutoClassifyAgent 进行分类，
+    然后切分+向量化写入 ChromaDB。
+
+    支持 .md / .txt / .pdf 文件。
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in {".md", ".txt", ".pdf"}:
+        raise HTTPException(
+            status_code=400,
+            detail="仅支持 .md / .txt / .pdf 格式",
+        )
+
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:  # 50MB 限制
+        raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
+
+    kb = _get_kb_service()
+    try:
+        result = kb.upload_and_index(
+            file_content=content,
+            original_filename=file.filename,
+            admin_id=user.user_id,
+            force_category=force_category,
+            skip_index=skip_index,
+        )
+    except Exception as exc:
+        logger.exception("知识文件上传失败")
+        raise HTTPException(status_code=500, detail=f"上传失败: {exc}")
+
+    return result
+
+
+@router.get("/knowledge/list")
+def knowledge_list(
+    category: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_admin),
+):
+    """列出知识库文件（管理员）。"""
+    kb = _get_kb_service()
+    files = kb.list_files(category=category, status=status)
+    return {"files": files, "total": len(files)}
+
+
+@router.get("/knowledge/stats")
+def knowledge_stats(user: AuthUser = Depends(require_admin)):
+    """获取知识库统计（管理员）。"""
+    kb = _get_kb_service()
+    return kb.get_stats()
+
+
+@router.post("/knowledge/{file_id}/delete")
+def knowledge_delete(file_id: str, user: AuthUser = Depends(require_admin)):
+    """删除知识文件（管理员）。"""
+    kb = _get_kb_service()
+    result = kb.delete_file(file_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "文件不存在"))
+    return result
+
+
+@router.post("/knowledge/{file_id}/reclassify")
+def knowledge_reclassify(file_id: str, user: AuthUser = Depends(require_admin)):
+    """重新自动分类文件（管理员）。"""
+    kb = _get_kb_service()
+    result = kb.reclassify_file(file_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "文件不存在"))
+    return result
+
+
+@router.post("/knowledge/{file_id}/category")
+def knowledge_update_category(
+    file_id: str,
+    body: dict,
+    user: AuthUser = Depends(require_admin),
+):
+    """手动修改文件分类（管理员）。
+
+    Body: {new_category: "strength"}
+    """
+    new_category = body.get("new_category", "")
+    if not new_category:
+        raise HTTPException(status_code=400, detail="new_category 必填")
+
+    kb = _get_kb_service()
+    result = kb.update_file_category(file_id, new_category)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "文件不存在"))
+    return result
+
+
+@router.post("/knowledge/rebuild")
+def knowledge_rebuild(user: AuthUser = Depends(require_admin)):
+    """重建整个知识库索引（管理员）。"""
+    kb = _get_kb_service()
+    result = kb.rebuild_index()
+    return result
+
+
+@router.post("/knowledge/classify")
+async def knowledge_classify_preview(
+    file: UploadFile = File(...),
+    user: AuthUser = Depends(require_admin),
+):
+    """预览分类结果（不上传，仅用于测试 AutoClassifyAgent）。"""
+    content = await file.read()
+    ext = os.path.splitext(file.filename)[1].lower()
+
+    kb = _get_kb_service()
+    preview = kb._extract_text_preview(content, ext)
+
+    from app.agents.auto_classify_agent import AutoClassifyAgent
+    agent = AutoClassifyAgent()
+    result = agent.classify(preview, file.filename)
+    return result

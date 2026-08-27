@@ -1,0 +1,284 @@
+% !TEX program = xelatex
+% =============================================================================
+% 中文求职简历 LaTeX 模板
+% Author: Kody
+% Repository: https://github.com/kodyyu1126/Chinese-resume-template-work
+% Compiler: XeLaTeX
+% =============================================================================
+\documentclass[11pt,a4paper,fontset=none]{ctexart}
+
+\IfFontExistsTF{Times New Roman}{\setmainfont{Times New Roman}}{}
+
+\newif\ifusenotecjkfonts
+\IfFileExists{D:/Download/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf}{
+    \IfFileExists{D:/Download/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf}{
+        \usenotecjkfontstrue
+    }{}
+}{}
+
+\newif\ifusemisansfonts
+\IfFontExistsTF{MiSans}{\usemisansfontstrue}{}
+
+\newif\ifuseuploadedcjkfonts
+\IfFileExists{fonts/STSong.ttf}{
+    \IfFileExists{fonts/STHeiti.ttf}{
+        \IfFileExists{fonts/STKaiti.ttf}{\useuploadedcjkfontstrue}{}
+    }{}
+}{}
+
+\newif\ifusesystemcjkfonts
+\IfFontExistsTF{STSong}{
+    \IfFontExistsTF{STHeiti}{
+        \IfFontExistsTF{STKaiti}{\usesystemcjkfontstrue}{}
+    }{}
+}{}
+
+\newif\ifusewindowscjkfonts
+\IfFontExistsTF{STSong}{
+    \IfFontExistsTF{Microsoft YaHei}{
+        \IfFileExistsTF{STKaiti}{\usewindowscjkfontstrue}{}
+    }{}
+}{}
+
+\ifusenotecjkfonts
+    \setCJKmainfont[
+        Path = D:/Download/OTF/SimplifiedChinese/,
+        BoldFont = NotoSerifCJKsc-Bold.otf,
+        ItalicFont = NotoSerifCJKsc-Medium.otf
+    ]{NotoSerifCJKsc-Regular.otf}
+    \setCJKsansfont[
+        Path = D:/Download/OTF/SimplifiedChinese/,
+        BoldFont = NotoSerifCJKsc-Bold.otf
+    ]{NotoSerifCJKsc-Regular.otf}
+    \setCJKmonofont[Path = D:/Download/OTF/SimplifiedChinese/]{NotoSerifCJKsc-Regular.otf}
+\else\ifusemisansfonts
+    \setCJKmainfont[BoldFont=MiSans]{MiSans}
+    \setCJKsansfont{MiSans}
+    \setCJKmonofont{MiSans}
+\else\ifuseuploadedcjkfonts
+    \setCJKmainfont[
+        Path = fonts/,
+        BoldFont = STHeiti.ttf,
+        ItalicFont = STKaiti.ttf
+    ]{STSong.ttf}
+    \setCJKsansfont[Path = fonts/]{STHeiti.ttf}
+    \setCJKmonofont[Path = fonts/]{STHeiti.ttf}
+\else\ifusesystemcjkfonts
+    \setCJKmainfont[BoldFont = STHeiti,ItalicFont = STKaiti]{STSong}
+    \setCJKsansfont{STHeiti}
+    \setCJKmonofont{STHeiti}
+\else\ifusewindowscjkfonts
+    \setCJKmainfont[BoldFont = Microsoft YaHei,ItalicFont = STKaiti]{STSong}
+    \setCJKsansfont{Microsoft YaHei}
+    \setCJKmonofont{Microsoft YaHei}
+\else
+    \setCJKmainfont[BoldFont = Noto Sans CJK SC,ItalicFont = Noto Serif CJK SC]{Noto Serif CJK SC}
+    \setCJKsansfont{Noto Sans CJK SC}
+    \setCJKmonofont{Noto Sans CJK SC}
+\fi\fi\fi\fi\fi
+
+\usepackage{geometry}
+\geometry{a4paper, left=1.5cm, right=1.5cm, top=1.5cm, bottom=1.5cm}
+
+\usepackage{xcolor}
+\definecolor{sectioncolor}{RGB}{0,0,0}
+\definecolor{linkcolor}{RGB}{0,0,0}
+\definecolor{textcolor}{RGB}{0,0,0}
+
+\usepackage{titlesec}
+\titleformat{\section}
+    {\Large\bfseries\color{sectioncolor}}
+    {}
+    {0em}
+    {\uppercase}
+    [\vspace{-0.8em}\rule{\textwidth}{1pt}]
+\titlespacing{\section}{0pt}{0.1em}{0.1em}
+
+\usepackage{enumitem}
+\setlist[itemize]{leftmargin=*, nosep, topsep=0.15em, itemsep=0.05em, parsep=0em}
+
+\usepackage{graphicx}
+\setkeys{Gin}{draft=false}
+\usepackage[export]{adjustbox}
+\usepackage{calc}
+
+\usepackage{tabularx}
+\usepackage{multirow}
+
+\usepackage{fontawesome5}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=linkcolor, urlcolor=linkcolor}
+
+\color{textcolor}
+\linespread{1.15}
+\pagestyle{empty}
+
+\newcommand{\daterange}[1]{{\textbf{#1}}}
+\newcommand{\entrytitle}[1]{{\textbf{#1}}}
+
+\begin{document}
+
+% ── 个人信息 ──
+\noindent
+\begin{minipage}[t]{0.3\textwidth}
+    \vspace*{-2em}
+    \begin{flushleft}
+        \adjustbox{valign=t, raise=-0.7em}{
+            \IfFileExists{校徽.png}{
+                \includegraphics[width=4.8cm,height=5.7cm,keepaspectratio]{校徽.png}
+            }{}
+        }
+    \end{flushleft}
+\end{minipage}%
+\begin{minipage}[t]{0.35\textwidth}
+    \vspace*{-2em}
+    \begin{flushleft}
+        {\Huge\bfseries\color{sectioncolor} 满心文} \\[1em]
+        \begin{tabular}{@{}ll@{\hspace{0.8em}}ll@{}}
+            \textbf{电话：} & 15673280630 \\[0.3em]
+            \textbf{求职：} & 后端/AI 应用开发 \\
+            \textbf{邮箱：} & echomxww@163.com \\
+        \end{tabular}
+    \end{flushleft}
+\end{minipage}%
+\begin{minipage}[t]{0.3\textwidth}
+    \vspace*{-2em}
+    \begin{flushright}
+        \adjustbox{valign=t, raise=-0.7em}{
+            \includegraphics[width=3.2cm,height=3.8cm,keepaspectratio]{照片.png}
+        }
+    \end{flushright}
+\end{minipage}
+
+\vspace{0.2em}
+
+% ── 教育背景 ──
+\section*{教育背景}
+\vspace{-0.3em}
+
+\noindent
+\textbf{西安电子科技大学（211）\quad 电子信息 \quad 硕士}
+\hfill\textbf{2024.09 \textasciitilde{} 2027.06}
+
+\par\noindent
+GPA：专业前 10\% \quad 主修课程：强化学习、深度学习、导航与制导、信息论
+
+\vspace{0.2em}
+\noindent
+\textbf{湘潭大学（双一流） \quad 通信工程 \quad 学士}
+\hfill\textbf{2019.09 \textasciitilde{} 2023.06}
+
+\par\noindent
+GPA：专业前 20\% \quad 主修课程：信号与系统、计算机网络、通信原理、数据结构与算法
+
+% ── 实习经历 ──
+\section*{实习经历}
+\vspace{-0.1em}
+
+\noindent
+\entrytitle{广联达科技股份有限公司（北京）｜全栈开发实习生}
+\hfill \daterange{2026.05\textasciitilde{} 2026.07}
+
+\par\noindent
+ \textbf{项目概述：}参与研发智能建造"云-边-端"一体化机器人管理平台，实现异构建筑机器人的远程统一监控、调度与智能化巡检，支撑施工现场落地使用。
+
+\par\noindent
+$\bullet$ \textbf{云端管理与远程可视化：}基于 Next.js、React 搭建可视化前端平台，封装标准化 UI 组件与 CRUD 页面；搭建流媒体推拉流服务支持可见光/红外双路视频传输与远程遥控驾驶（含手柄操控）；基于 Three.js 开发轻量化点云播放器，通过工程优化适配低端工控机。
+
+\par\noindent
+$\bullet$ \textbf{AI 智能巡检与安全智能体：}基于 \textbf{nanobot Agent 框架二次开发}，扩展知识库工具构建\textbf{ RAG} 告警知识库，支持多轮对话式故障排查；开发工地安全智能体，接入传感器数据流，异常时自动封装坐标参数调用导航算法重规划巡检路线并通过 MQTT 下发执行。
+
+\par\noindent
+$\bullet$ \textbf{边云协同与 AI 提效：}基于 FastAPI 开发设备管理接口，结合 Redis 缓存在线状态，基于 MQTT、ROS1 实现边缘心跳上报与导航任务远程下发；引入 Claude Code 建立"规范投喂 $\rightarrow$ AI 生成 $\rightarrow$ 人工审查"开发流程，\textbf{编写 CLAUDE.md 规范与 Prompt 模板}，整体开发效率提升约 40\%。
+
+\par\noindent
+$\bullet$ \textbf{项目成果：}系统在多个施工现场交付验收，视频推流模块稳定运行数百小时；AI 诊断与安全智能体功能纳入团队后续迭代储备。
+
+% ── 项目经历 ──
+\section*{项目经历}
+\vspace{-0.1em}
+
+\noindent
+\entrytitle{WenYaSports：LLM 驱动 Runtime Harness 的多智能体运动分析平台 ｜ 独立设计与开发}
+\hfill \daterange{2026.06 \textasciitilde{} 2026.09}
+
+\par\noindent
+\textbf{技术栈：}Python、FastAPI、Polars、SQLite、LLM Orchestration、MCP 协议、ReAct、Multi-Agent、React、Vite、Ant Design
+
+\par\noindent
+\textbf{项目简介：}面向运动数据智能分析场景，构建 LLM 驱动的 Agent Runtime Harness，完成 FIT 文件解析、特征工程、记忆关联到个性化训练建议的端到端多智能体协作；实现 LLM 动态规划与重规划、MCP 生态集成、分级记忆与零依赖降级，支撑运动数据自动化深度分析与 AI 教练式交互。
+
+\par\noindent
+\textbf{项目亮点：}
+
+\par\noindent
+$\bullet$ \textbf{Agent Runtime Harness}，统一管理 Agent 能力注册、MessageBus 发布订阅通信、Blackboard 共享状态与 GovernanceEngine 预算治理四大基础设施；支持 Agent 生命周期管理、工作流编排与动态路由调度，实现 5 个 Agent、15 项能力的协同运行。
+
+\par\noindent
+$\bullet$ \textbf{LLM 驱动的 Orchestrator}，替代传统规则引擎实现智能编排核心——LLM 动态分析用户意图 $\rightarrow$ 拆解子任务 $\rightarrow$ 按 Agent 能力声明智能匹配 $\rightarrow$ 生成执行计划 $\rightarrow$ 失败自动重规划；设计 Planner-Executor-Reviser 多角色对话协作模式，支持计划级、步骤级重规划。
+
+\par\noindent
+$\bullet$ \textbf{Agentic Workflow 与三层决策}，基于 ReAct 推理循环（Think/Plan/Act/Observe/Reflect）与 Tree-of-Thought 多路径探索构建有界 Agent Loop；设计三层决策架构：战略层（目标分析+风险评估）$\rightarrow$战术层（工具编排+错误恢复）$\rightarrow$验证层（Critique 独立评审+Debate 多 Agent 辩论+Quality Gate 质量门禁），确保输出质量。
+
+\par\noindent
+$\bullet$ \textbf{MCP 生态集成与分级记忆}，实现 MCP Client/Server/Registry 三件套支持 stdio/SSE 双传输协议；设计 MCPAgentBridge 将 Agent 能力自动暴露为 MCP 工具，统一本地 Agent、插件与远程服务调用接口；构建 Working/Episodic/Semantic 三层分级记忆，基于 TF-IDF 实现语义检索。
+
+\par\noindent
+$\bullet$ \textbf{可观测性与零依赖降级}，实现 AgentMessage 发布订阅机制接入 append-only 事件日志，\textbf{支持执行链路回放与断点续跑}；Trace Collector 记录每步推理与决策过程实现全链路可观测；\textbf{设计三层降级架构}应对多场景故障：Embedder 层降级、Orchestrator 层降级、Agent 层降级，确保 Demo 零配置可运行、生产环境故障不中断。
+
+\vspace{0.4em}
+\noindent
+\entrytitle{知言 — 面向创作者的智能内容分享平台 ｜ 后端开发}
+\hfill \daterange{2025.04 \textasciitilde{} 2025.09}
+
+\par\noindent
+\textbf{技术栈：}Spring Boot、Spring Security、MySQL、Redis、Kafka、Elasticsearch、OSS、Docker
+
+\par\noindent
+$\bullet$ \textbf{高并发点赞系统：}采用 Kafka 异步写 + 聚合读模式应对高并发场景，基于 Redis Bitmap 实现幂等去重，通过消息回放保障最终一致性，支撑热点内容万级 QPS。
+
+\par\noindent
+$\bullet$ \textbf{Feed 流三级缓存：}设计本地 Caffeine + Redis 页面缓存 + Redis 片段缓存架构，实现热点 Key 动态探测与单飞锁机制，解决缓存击穿与雪崩问题。
+
+\par\noindent
+$\bullet$ \textbf{AI 知识问答：}构建 RAG 增强的问答能力，实现用户调用 $\rightarrow$ 向量检索 $\rightarrow$ 流式生成链路，通过预索引策略降低首次问答延迟。
+
+\par\noindent
+$\bullet$ \textbf{全文检索与联想：}基于 Elasticsearch 构建搜索与联想，采用 search\_after 游标分页保证深分页稳定性，利用 ES的completion suggester 实现低延迟前缀联想。
+
+% ── 科研成果 ──
+\section*{科研成果}
+\vspace{-0.1em}
+
+\noindent
+$\bullet$ \textit{Maximizing Spatial Entropy: An Information-Theoretic Approach to Multi-Agent Angular Coverage}. EAAI，在投，学生一作。
+\par\noindent
+$\bullet$ \textit{Regular-Polygon Encirclement via Gradient Descent on Angular Gaps}. IEEE RAL，在投，学生一作。
+\par\noindent
+$\bullet$ \textit{Trajectory planning and tracking for UAVs with deep reinforcement learning and adaptive non-linear MPC}. SCI 一区，学生二作。
+\par\noindent
+$\bullet$ 发明专利：基于深度强化学习与自适应非线性 MPC 的无人机轨迹规划与跟踪算法（已公开）。
+\par\noindent
+$\bullet$ 荣誉：\textbf{2024--2025 优秀研究生}；2024/2025 研究生三/二等奖学金。
+
+% ── 专业技能 ──
+\section*{专业技能}
+\vspace{-0.1em}
+
+\par\noindent \textbf{Java \& 框架：}熟练掌握 Java 面向对象、集合、多线程、IO、JVM 内存模型与 GC 机制；熟悉 Spring、Spring Boot、Spring AI、WebFlux 等框架，掌握 IOC、AOP、事务、SSE 流式响应等核心特性。
+
+\par\noindent \textbf{数据库与缓存：}熟悉 MySQL 事务、索引、MVCC、锁、慢 SQL 优化；熟悉 Redis 数据类型、缓存策略、分布式锁、高可用集群及缓存击穿/穿透/雪崩解决方案。
+
+\par\noindent \textbf{Python \& 算法：}熟练使用 Python 进行数据处理与算法开发，熟悉 PyTorch 深度学习框架；掌握 DQN、PPO 等深度强化学习算法，具有基于强化学习的无人机轨迹规划与跟踪控制实际项目经验。
+
+\par\noindent \textbf{AI \& Agent：}掌握 Ollama 本地模型部署与 QLoRA 量化微调，熟悉 RAG 检索增强生成与 Chroma 向量数据库；理解 Agent 范式设计，熟悉有限循环协作、主官拆解路由、MCP 工具调用、Harness Runtime 等多 Agent 协同机制。
+
+\par\noindent \textbf{英语能力：}CET-4（540 分）、CET-6（504 分），能熟练阅读英文技术文档与学术论文，日常英语交流流畅。
+
+% ── 自我评价 ──
+\section*{自我评价}
+\vspace{-0.1em}
+
+\par\noindent 热爱后端开发与智能体应用，具备扎实的 Java 基础与 Python 开发能力。熟悉从模型微调、RAG 检索到多 Agent 协同的完整 AI 应用落地流程。注重代码质量与系统可维护性，科研工程能力突出，具备严谨的逻辑思维与数据分析功底；善于团队协作与知识分享，追求高效、稳健、可扩展的工程方案。
+
+\end{document}
