@@ -5,6 +5,7 @@ API endpoints for dashboard monitoring and dynamic orchestration.
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from app.harness import (
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Global harness instance
 _harness: Optional[Harness] = None
+_llm_orchestrator: Optional[Any] = None
 
 
 def get_harness() -> Harness:
@@ -32,6 +34,14 @@ def get_harness() -> Harness:
     if _harness is None:
         _harness = create_harness()
     return _harness
+
+
+def get_llm_orchestrator() -> Any:
+    """Get or create the global LLM Orchestrator instance."""
+    global _llm_orchestrator
+    if _llm_orchestrator is None:
+        _llm_orchestrator = create_llm_orchestrator()
+    return _llm_orchestrator
 
 
 def create_harness() -> Harness:
@@ -264,3 +274,40 @@ def get_chat_workflow() -> List[Dict[str, Any]]:
             "output_key": "context_update",
         },
     ]
+
+
+def create_llm_orchestrator() -> "LLMOrchestrator":
+    """Create the LLM-driven Orchestrator.
+
+    Reads LLM configuration from environment variables:
+    - OPENAI_API_KEY: API key (optional, falls back to rule-based planning)
+    - ORCHESTRATOR_MODEL: Model name (default: gpt-4o-mini)
+    - ORCHESTRATOR_MAX_REPLANNING: Max replanning attempts (default: 3)
+    """
+    from app.orchestrator.llm_orchestrator import LLMOrchestrator
+
+    harness = get_harness()
+    model = os.environ.get("ORCHESTRATOR_MODEL", "gpt-4o-mini")
+    max_replanning = int(os.environ.get("ORCHESTRATOR_MAX_REPLANNING", "3"))
+
+    llm_client = None
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        try:
+            from openai import OpenAI
+            llm_client = OpenAI(api_key=api_key)
+        except Exception:
+            logger.warning("Failed to initialize LLM client, will use rule-based planning")
+
+    orchestrator = LLMOrchestrator(
+        harness=harness,
+        llm_client=llm_client,
+        model=model,
+        max_replanning=max_replanning,
+    )
+
+    logger.info(
+        "LLM Orchestrator initialized (model=%s, llm_available=%s, max_replanning=%d)",
+        model, llm_client is not None, max_replanning,
+    )
+    return orchestrator

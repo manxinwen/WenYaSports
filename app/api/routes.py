@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.agents.coordinator_agent import CoordinatorAgent, CoordinatorError
 from app.db import database
-from app.harness_setup import get_harness, get_analysis_workflow, get_chat_workflow
+from app.harness_setup import get_harness, get_analysis_workflow, get_chat_workflow, get_llm_orchestrator
 from app.services.fit_parser import parse_fit_file
 
 logger = logging.getLogger(__name__)
@@ -455,6 +455,60 @@ def run_harness_orchestration(body: dict):
     )
 
     return result
+
+
+@router.post("/harness/llm-orchestrate")
+def run_llm_orchestration(body: dict):
+    """LLM 驱动的智能编排：由大模型分析目标、规划Agent、动态执行。
+
+    与固定 workflow 不同，LLM Orchestrator:
+    1. 使用 LLM 分析用户目标，拆解为子任务
+    2. 根据 Agent 能力声明智能选择和编排 Agent
+    3. 支持动态重规划——步骤失败后 LLM 自动调整策略
+    4. 完整的可观测性追踪
+
+    Body: {
+        goal: "用户想要达成的目标",
+        initial_input: {file_path, user_id, ...},
+        user_id: "user_001",
+        session_id: "optional-session-id"
+    }
+
+    Returns:
+        {
+            success: bool,
+            session_id: str,
+            plan_used: {...},        # LLM 生成的执行计划
+            results: {...},          # 各 Agent 的执行结果
+            steps_completed: int,
+            replans: int,            # 重规划次数
+        }
+    """
+    goal = (body.get("goal") or "").strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal is required")
+
+    initial_input = body.get("initial_input", {})
+    user_id = body.get("user_id", "default_user")
+    session_id = body.get("session_id")
+
+    orchestrator = get_llm_orchestrator()
+
+    result = orchestrator.execute_goal(
+        goal=goal,
+        initial_input=initial_input,
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+    return result
+
+
+@router.get("/harness/orchestrator/stats")
+def get_orchestrator_stats():
+    """获取 LLM Orchestrator 运行统计信息。"""
+    orchestrator = get_llm_orchestrator()
+    return orchestrator.get_orchestrator_stats()
 
 
 @router.get("/harness/blackboard")
