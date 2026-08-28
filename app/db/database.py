@@ -141,6 +141,187 @@ def get_activity(activity_id: int, db_path: Optional[str] = None) -> Optional[di
     return dict(row) if row else None
 
 
+def get_user_dashboard(user_id: str, db_path: Optional[str] = None) -> dict:
+    """Get aggregated dashboard stats for a user.
+
+    Returns:
+        {
+            "total_activities": int,
+            "weekly": [{day, distance, duration, calories}, ...],
+            "sports": [{name, value, color}, ...],
+            "monthly": [{month, activities, km}, ...],
+            "recent": [{activity_id, sport, distance, duration, date, ...}, ...],
+            "prs": [{label, value, unit, sport, accent}, ...],
+            "empty": bool,
+        }
+    """
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM activities WHERE user_id = ? ORDER BY date DESC",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    activities = []
+    for r in rows:
+        row_dict = dict(r)
+        features = json.loads(row_dict.get("features_json") or "{}")
+        metadata = json.loads(row_dict.get("metadata_json") or "{}")
+        activities.append({
+            "activity_id": row_dict["activity_id"],
+            "date": row_dict["date"],
+            "sport": metadata.get("sport", "run"),
+            "distance": features.get("total_distance_m", 0),
+            "duration": features.get("total_duration_s", 0),
+            "calories": features.get("total_calories", 0),
+            "avg_hr": features.get("avg_hr"),
+            "avg_pace": features.get("avg_pace"),
+            "features": features,
+            "metadata": metadata,
+        })
+
+    if not activities:
+        return {
+            "total_activities": 0,
+            "weekly": [],
+            "sports": [],
+            "monthly": [],
+            "recent": [],
+            "prs": [],
+            "empty": True,
+        }
+
+    # ---- Weekly data (last 7 days) ----
+    from datetime import datetime, timedelta
+    today = datetime.now()
+    weekly = []
+    for i in range(6, -1, -1):
+        day = today - timedelta(days=i)
+        day_str = day.strftime("%Y-%m-%d")
+        day_label = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][day.weekday()]
+        day_activities = [a for a in activities if a["date"] and day_str in str(a["date"])]
+        d_distance = sum(a["distance"] / 1000 for a in day_activities)  # km
+        d_duration = sum(a["duration"] / 60 for a in day_activities)    # min
+        d_calories = sum(a["calories"] for a in day_activities)
+        weekly.append({
+            "day": day_label,
+            "date": day_str,
+            "距离": round(d_distance, 1),
+            "时长": round(d_duration),
+            "卡路里": round(d_calories),
+        })
+
+    # ---- Sport distribution ----
+    sport_colors = {"run": "#ff6a00", "cycling": "#00d4ff", "hike": "#c6ff3d", "swim": "#60a5fa", "walk": "#a78bfa"}
+    sport_map = {"run": "跑步", "cycling": "骑行", "hike": "徒步", "swim": "游泳", "walk": "步行"}
+    sport_totals: dict = {}
+    for a in activities:
+        s = a["sport"] or "run"
+        sport_totals[s] = sport_totals.get(s, 0) + a["distance"] / 1000
+    total_sport_km = sum(sport_totals.values()) or 1
+    sports = []
+    for s, km in sorted(sport_totals.items(), key=lambda x: -x[1]):
+        sports.append({
+            "name": sport_map.get(s, s),
+            "value": round(km / total_sport_km * 100),
+            "color": sport_colors.get(s, "#888"),
+            "total_km": round(km, 1),
+        })
+
+    # ---- Monthly trend (last 6 months) ----
+    monthly = []
+    for i in range(5, -1, -1):
+        first_day = today.replace(day=1) - timedelta(days=0)
+        # Go back i months
+        month_date = today
+        for _ in range(i):
+            if month_date.month == 1:
+                month_date = month_date.replace(year=month_date.year - 1, month=12)
+            else:
+                month_date = month_date.replace(month=month_date.month - 1)
+        month_label = f"{month_date.month}月"
+        month_activities = [
+            a for a in activities
+            if a["date"] and f"{month_date.year}-{month_date.month:02d}" in str(a["date"])
+        ]
+        monthly.append({
+            "month": month_label,
+            "活动": len(month_activities),
+            "公里": round(sum(a["distance"] / 1000 for a in month_activities), 1),
+        })
+
+    # ---- Recent activities (last 5) ----
+    recent = []
+    for a in activities[:5]:
+        recent.append({
+            "id": a["activity_id"],
+            "type": a["sport"],
+            "name": a["metadata"].get("name") or f"{sport_map.get(a['sport'], a['sport'])}活动",
+            "date": a["date"],
+            "distance": f"{(a['distance'] / 1000):.2f} km",
+            "duration": _format_duration(a["duration"]),
+            "pace": a.get("avg_pace", "—"),
+            "calories": round(a["calories"]),
+        })
+
+    # ---- PRs ----
+    prs = _compute_prs(activities)
+
+    return {
+        "total_activities": len(activities),
+        "weekly": weekly,
+        "sports": sports,
+        "monthly": monthly,
+        "recent": recent,
+        "prs": prs,
+        "empty": False,
+    }
+
+
+def _format_duration(seconds: float) -> str:
+    if not seconds:
+        return "—"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    if h > 0:
+        return f"{h}:{m:02d}"
+    return f"{m}min"
+
+
+def _compute_prs(activities: list) -> list:
+    """Compute personal records from activities."""
+    prs = [
+        {"label": "最远距离", "value": "—", "unit": "KM", "sport": "", "accent": "#ff6a00"},
+        {"label": "最长时间", "value": "—", "unit": "", "sport": "", "accent": "#00d4ff"},
+        {"label": "最高海拔", "value": "—", "unit": "M", "sport": "", "accent": "#60a5fa"},
+        {"label": "活动次数", "value": str(len(activities)), "unit": "", "sport": "总", "accent": "#c6ff3d"},
+    ]
+
+    if activities:
+        max_dist = max(activities, key=lambda a: a["distance"])
+        prs[0]["value"] = f"{max_dist['distance'] / 1000:.1f}"
+        prs[0]["sport"] = f"{max_dist['sport']}"
+
+        max_dur = max(activities, key=lambda a: a["duration"])
+        h = int(max_dur["duration"] // 3600)
+        m = int((max_dur["duration"] % 3600) // 60)
+        prs[1]["value"] = f"{h}:{m:02d}" if h > 0 else str(m)
+        prs[1]["sport"] = f"{max_dur['sport']}"
+
+        # Elevation from features if available
+        max_elev = 0
+        for a in activities:
+            elev = a.get("features", {}).get("total_elevation_gain_m", 0)
+            if elev > max_elev:
+                max_elev = elev
+        prs[2]["value"] = str(int(max_elev)) if max_elev > 0 else "—"
+        prs[2]["sport"] = "累计爬升" if max_elev > 0 else ""
+
+    return prs
+
+
 # ---------------------------------------------------------------------------
 # Knowledge Files CRUD
 # ---------------------------------------------------------------------------

@@ -14,6 +14,11 @@ from app.agents.coordinator_agent import CoordinatorAgent, CoordinatorError
 from app.db import database
 from app.harness_setup import get_harness, get_analysis_workflow, get_chat_workflow, get_llm_orchestrator
 from app.services.fit_parser import parse_activity_file
+from app.auth import (
+    authenticate, create_token, get_current_user,
+    require_admin, UserRole, register, list_registered_users,
+)
+from app.auth.auth import AuthUser
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +132,18 @@ async def upload_fit(
         "recommendation": result["recommendation"],
         "user_profile_summary": result["user_profile_summary"],
     }
+
+
+@router.get("/dashboard/summary")
+def dashboard_summary(
+    user_id: str = Query(...),
+):
+    """Return aggregated dashboard data for a specific user.
+
+    Demo-level access control: the frontend passes the current user's user_id.
+    The database layer ensures data isolation (filtered by user_id).
+    """
+    return database.get_user_dashboard(user_id)
 
 
 @router.get("/activities")
@@ -765,11 +782,6 @@ def mcp_registry_status():
 # ----------------------------------------------------------------------
 # Auth & Role Management
 # ----------------------------------------------------------------------
-from app.auth import (
-    authenticate, create_token, get_current_user,
-    require_admin, UserRole,
-)
-from app.auth.auth import AuthUser
 
 
 @router.post("/auth/login")
@@ -795,6 +807,38 @@ def auth_login(body: dict):
         "user": user.to_dict(),
         "expires_in": 3600,
     }
+
+
+@router.post("/auth/register")
+def auth_register(body: dict):
+    """注册新用户：返回 Token 和用户信息。
+
+    Body: {username, password}
+    - username: 3-32 字符
+    - password: 至少 6 字符
+    """
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+
+    try:
+        user = register(username, password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    token = create_token(user)
+    return {
+        "token": token,
+        "user": user.to_dict(),
+        "expires_in": 3600,
+        "message": f"用户 '{username}' 注册成功",
+    }
+
+
+@router.get("/auth/users")
+def auth_list_users(user: AuthUser = Depends(require_admin)):
+    """获取已注册用户列表（管理员）。"""
+    users = list_registered_users()
+    return {"users": users, "total": len(users)}
 
 
 @router.get("/auth/me")

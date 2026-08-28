@@ -13,6 +13,8 @@ from app.auth.auth import (
     require_admin,
     require_user,
     authenticate,
+    register,
+    list_registered_users,
     ADMIN_USERNAME,
     ADMIN_PASSWORD,
 )
@@ -26,6 +28,8 @@ __all__ = [
     "require_admin",
     "require_user",
     "authenticate",
+    "register",
+    "list_registered_users",
     "ADMIN_USERNAME",
     "ADMIN_PASSWORD",
 ]

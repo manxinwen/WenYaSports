@@ -103,6 +103,80 @@ def verify_token(token: str) -> Optional[AuthUser]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# 用户存储（Demo 级别：内存存储，重启后丢失）
+# ---------------------------------------------------------------------------
+# 注册用户存储: {username: {"user_id": str, "username": str, "password": str, "role": UserRole, "created_at": float}}
+_registered_users: dict = {}
+
+
+def _hash_password(password: str) -> str:
+    """简单的密码哈希（Demo 级别）。"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def register(username: str, password: str) -> AuthUser:
+    """注册新用户。
+
+    Args:
+        username: 用户名（3-32 字符）
+        password: 密码（至少 6 字符）
+
+    Returns:
+        注册成功的 AuthUser
+
+    Raises:
+        ValueError: 参数无效或用户名已存在
+    """
+    username = (username or "").strip()
+    if not username:
+        raise ValueError("用户名不能为空")
+    if len(username) < 3:
+        raise ValueError("用户名至少为 3 个字符")
+    if len(username) > 32:
+        raise ValueError("用户名不能超过 32 个字符")
+    if not password or len(password) < 6:
+        raise ValueError("密码至少为 6 个字符")
+
+    # 保留管理员账号名
+    if username == ADMIN_USERNAME:
+        raise ValueError(f"用户名 '{ADMIN_USERNAME}' 已被保留")
+
+    # 检查重复
+    if username in _registered_users:
+        raise ValueError("该用户名已被注册")
+
+    user_id = f"user_{username}"
+    _registered_users[username] = {
+        "user_id": user_id,
+        "username": username,
+        "password": _hash_password(password),
+        "role": UserRole.USER,
+        "created_at": time.time(),
+    }
+
+    logger.info("新用户注册: username=%s, user_id=%s", username, user_id)
+
+    return AuthUser(
+        user_id=user_id,
+        role=UserRole.USER,
+        username=username,
+    )
+
+
+def list_registered_users() -> list:
+    """获取已注册用户列表（不含密码）。"""
+    return [
+        {
+            "user_id": u["user_id"],
+            "username": u["username"],
+            "role": u["role"].value,
+            "created_at": u["created_at"],
+        }
+        for u in _registered_users.values()
+    ]
+
+
 def authenticate(username: str, password: str) -> Optional[AuthUser]:
     """验证用户名密码，返回 AuthUser 或 None。"""
     if not username or not password:
@@ -116,7 +190,17 @@ def authenticate(username: str, password: str) -> Optional[AuthUser]:
             )
         # Admin 用户名但密码错误 → 直接拒绝
         return None
-    # 普通用户：接受任意非空用户名密码（Demo 级别）
+    # 已注册用户：验证密码哈希
+    stored = _registered_users.get(username)
+    if stored:
+        if stored["password"] == _hash_password(password):
+            return AuthUser(
+                user_id=stored["user_id"],
+                role=stored["role"],
+                username=stored["username"],
+            )
+        return None
+    # 其他情况：接受任意非空用户名密码（Demo 级别，向后兼容）
     return AuthUser(
         user_id=f"user_{username}",
         role=UserRole.USER,

@@ -1,4 +1,5 @@
-import { BrowserRouter, Route, Routes, NavLink, useLocation, Navigate } from 'react-router-dom';
+import { useState, useRef, useEffect } from 'react';
+import { BrowserRouter, Route, Routes, NavLink, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import DashboardPage from './pages/DashboardPage';
 import ActivitiesPage from './pages/ActivitiesPage';
 import ActivityDetailPage from './pages/ActivityDetailPage';
@@ -10,7 +11,7 @@ import MemoryInspectorPage from './pages/MemoryInspectorPage';
 import TestPlaygroundPage from './pages/TestPlaygroundPage';
 import HarnessArchPage from './pages/HarnessArchPage';
 import DecisionExplainabilityPage from './pages/DecisionExplainabilityPage';
-import AdminLoginPage from './pages/AdminLoginPage';
+import LoginPage from './pages/LoginPage';
 import KnowledgeManagerPage from './pages/KnowledgeManagerPage';
 import { AuthProvider, useAuth } from './AuthContext';
 import './index.css';
@@ -92,7 +93,8 @@ function Sidebar() {
             return (
               <NavLink
                 key={item.path}
-                to="/admin-login"
+                to="/login"
+                state={{ from: '/knowledge', role: 'admin' }}
                 className={({ isActive }) =>
                   `nav-item ${isActive ? 'active' : ''}`
                 }
@@ -159,42 +161,324 @@ function Sidebar() {
           </div>
         </div>
 
-        <div className="user-info">
-          <div className="avatar">{isAdmin ? 'A' : 'D'}</div>
-          <div className="user-detail">
-            <span className="user-name">{user?.username || 'Demo User'}</span>
-            <span className="user-status">
-              {isAdmin ? '● ADMIN' : '● ONLINE'}
-            </span>
-          </div>
-          {user && (
-            <button
-              onClick={logout}
-              style={{
-                background: 'transparent', border: 'none',
-                color: 'var(--ink-400)', cursor: 'pointer',
-                fontSize: 16, padding: 4,
-              }}
-              title="退出登录"
-            >
-              ⏻
-            </button>
-          )}
-        </div>
+        <UserArea />
       </div>
     </aside>
+  );
+}
+
+function UserArea() {
+  const { user, isAdmin, isLoggedIn, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
+
+  const handleSwitch = () => {
+    navigate('/login');
+  };
+
+  const handleLogin = () => {
+    navigate('/login');
+  };
+
+  if (!isLoggedIn) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 8,
+        padding: '12px 14px',
+        background: 'var(--panel)',
+        borderRadius: 10,
+        border: '1px solid var(--border)',
+      }}>
+        <div style={{ fontSize: 12, color: 'var(--ink-400)' }}>
+          未登录 · 游客模式
+        </div>
+        <button
+          onClick={handleLogin}
+          style={{
+            padding: '10px 14px',
+            background: 'var(--gradient)',
+            color: '#000',
+            border: 'none',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+          }}
+        >
+          🔐 登录
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      padding: '12px 14px',
+      background: 'var(--panel)',
+      borderRadius: 10,
+      border: '1px solid var(--border)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div className="avatar" style={{
+          background: isAdmin
+            ? 'linear-gradient(135deg, #ff6a00, #ee0979)'
+            : 'linear-gradient(135deg, #00d4ff, #0099cc)',
+        }}>
+          {isAdmin ? 'A' : user?.username?.[0]?.toUpperCase() || 'U'}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13, fontWeight: 600,
+            color: 'var(--ink-100)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {user?.username || 'User'}
+          </div>
+          <div style={{
+            fontSize: 10,
+            color: isAdmin ? 'var(--flame)' : 'var(--cyan)',
+            letterSpacing: '0.15em',
+            textTransform: 'uppercase',
+            fontWeight: 500,
+          }}>
+            {isAdmin ? '● ADMIN' : '● USER'}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button
+          onClick={handleSwitch}
+          style={{
+            flex: 1,
+            padding: '7px 10px',
+            background: 'var(--bg-2)',
+            color: 'var(--ink-200)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            fontSize: 11,
+            cursor: 'pointer',
+            fontWeight: 500,
+          }}
+        >
+          🔄 切换
+        </button>
+        <button
+          onClick={handleLogout}
+          style={{
+            flex: 1,
+            padding: '7px 10px',
+            background: 'rgba(248,113,113,0.1)',
+            color: '#f87171',
+            border: '1px solid rgba(248,113,113,0.3)',
+            borderRadius: 6,
+            fontSize: 11,
+            cursor: 'pointer',
+            fontWeight: 500,
+          }}
+        >
+          🚪 退出
+        </button>
+      </div>
+    </div>
   );
 }
 
 function AdminRoute({ children }) {
   const { isAdmin, isLoggedIn } = useAuth();
   if (!isLoggedIn) {
-    return <Navigate to="/admin-login" state={{ from: '/knowledge' }} replace />;
+    return <Navigate to="/login" state={{ from: '/knowledge', role: 'admin' }} replace />;
   }
   if (!isAdmin) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/login" state={{ from: '/knowledge', role: 'admin' }} replace />;
   }
   return children;
+}
+
+function TopBar() {
+  const { user, isAdmin, isLoggedIn, logout } = useAuth();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const handleLogout = () => {
+    setOpen(false);
+    logout();
+    navigate('/login', { replace: true });
+  };
+
+  const handleSwitch = () => {
+    setOpen(false);
+    navigate('/login');
+  };
+
+  const handleLogin = () => {
+    setOpen(false);
+    navigate('/login');
+  };
+
+  return (
+    <div ref={ref} style={{
+      position: 'fixed',
+      top: 16,
+      right: 24,
+      zIndex: 1000,
+    }}>
+      {!isLoggedIn ? (
+        <button
+          onClick={handleLogin}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 18px',
+            background: 'var(--gradient)',
+            color: '#000',
+            border: 'none',
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 20px rgba(255,106,0,0.3)',
+          }}
+        >
+          🔐 登录
+        </button>
+      ) : (
+        <>
+          <button
+            onClick={() => setOpen(!open)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 12px 8px 8px',
+              background: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(10px)',
+              color: 'var(--ink-100)',
+              border: '1px solid var(--border)',
+              borderRadius: 30,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            <div style={{
+              width: 32, height: 32, borderRadius: '50%',
+              background: isAdmin
+                ? 'linear-gradient(135deg, #ff6a00, #ee0979)'
+                : 'linear-gradient(135deg, #00d4ff, #0099cc)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#000', fontWeight: 700, fontSize: 13,
+            }}>
+              {isAdmin ? 'A' : user?.username?.[0]?.toUpperCase() || 'U'}
+            </div>
+            <div style={{ textAlign: 'left', paddingRight: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2 }}>
+                {user?.username || 'User'}
+              </div>
+              <div style={{
+                fontSize: 9,
+                color: isAdmin ? 'var(--flame)' : 'var(--cyan)',
+                letterSpacing: '0.15em',
+                fontWeight: 500,
+              }}>
+                {isAdmin ? '● ADMIN' : '● USER'}
+              </div>
+            </div>
+            <span style={{ fontSize: 10, color: 'var(--ink-400)' }}>▼</span>
+          </button>
+
+          {open && (
+            <div style={{
+              position: 'absolute',
+              top: 'calc(100% + 8px)',
+              right: 0,
+              width: 220,
+              background: 'rgba(15,15,20,0.95)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              padding: 8,
+              boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
+            }}>
+              <div style={{
+                padding: '10px 12px',
+                borderBottom: '1px solid var(--border)',
+                marginBottom: 6,
+              }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
+                  {user?.username}
+                </div>
+                <div style={{
+                  fontSize: 10,
+                  color: isAdmin ? 'var(--flame)' : 'var(--cyan)',
+                  letterSpacing: '0.15em',
+                }}>
+                  {isAdmin ? 'ADMINISTRATOR' : 'REGULAR USER'}
+                </div>
+              </div>
+
+              <button
+                onClick={handleSwitch}
+                style={{
+                  width: '100%',
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px',
+                  background: 'transparent',
+                  color: 'var(--ink-200)',
+                  border: 'none',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                <span style={{ fontSize: 16 }}>🔄</span>
+                <span>切换账号</span>
+              </button>
+
+              <button
+                onClick={handleLogout}
+                style={{
+                  width: '100%',
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px',
+                  background: 'transparent',
+                  color: '#f87171',
+                  border: 'none',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(248,113,113,0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                <span style={{ fontSize: 16 }}>🚪</span>
+                <span>退出登录</span>
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 function AppContent() {
@@ -202,6 +486,7 @@ function AppContent() {
     <div className="app-layout">
       <Sidebar />
       <main className="main-content">
+        <TopBar />
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/activities" element={<ActivitiesPage />} />
@@ -216,7 +501,7 @@ function AppContent() {
           <Route path="/memory" element={<MemoryInspectorPage />} />
           <Route path="/test-lab" element={<TestPlaygroundPage />} />
           {/* Auth & Admin */}
-          <Route path="/admin-login" element={<AdminLoginPage />} />
+          <Route path="/login" element={<LoginPage />} />
           <Route
             path="/knowledge"
             element={
