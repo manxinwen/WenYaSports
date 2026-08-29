@@ -9,6 +9,56 @@
 
 ### Q1：什么是 Agent Harness？它和普通的 Agent 框架（如 LangChain）有什么区别？
 
+**八股文知识 — Agent 框架发展史**
+
+```
+LangChain (2022)     ──── Chain 模式，Prompt 驱动
+  │
+  ├─ 核心抽象：LLM → Prompt → Chain → Output Parser
+  ├─ 组合方式：SequentialChain, LLMChain, TransformChain
+  ├─ 局限：Chain 写死顺序，异常处理靠 try/except
+  │
+  ▼
+LangGraph (2023)     ──── 图模式，State 驱动
+  │
+  ├─ 核心抽象：StateGraph(Nodes + Edges + State)
+  ├─ 优势：支持循环、分支、条件路由
+  ├─ 局限：状态管理复杂，调试困难
+  │
+  ▼
+AutoGen / CrewAI (2023) ──── 多 Agent 协作
+  │
+  ├─ 核心抽象：Agent(role, goal, tools) + GroupChat
+  ├─ 优势：多个 Agent 对话协作
+  ├─ 局限：对话不可控、Token 消耗大
+  │
+  ▼
+我们的 Harness  ──── 运行时沙箱，能力声明驱动
+  ├─ 核心抽象：AgentRegistry + Blackboard + MessageBus + Governance
+  ├─ 优势：能力驱动而非 Prompt 驱动、基础设施统一管理
+  └─ 文件：app/harness/harness.py (626行)
+```
+
+**运行时沙箱是什么？**
+
+类比操作系统的概念：
+- 操作系统 = 给进程提供 CPU、内存、文件系统等基础设施
+- Agent Harness = 给 Agent 提供 Registry（进程管理）、Blackboard（共享内存）、MessageBus（IPC）、Governance（资源配额）
+
+**面试高频对比表**：
+
+| 维度 | LangChain | LangGraph | 我们的 Harness |
+|------|-----------|-----------|---------------|
+| 组合方式 | Chain 顺序执行 | Graph 条件分支 | 能力动态匹配 |
+| 状态管理 | 无（Chain 是纯函数） | State 传入传出 | Blackboard 命名空间 |
+| Agent 发现 | 硬编码 | 硬编码 | Registry 自动匹配 |
+| 异常处理 | try/except | State 流转 | Layer1-L2-L3 三级容错 |
+| 可观测性 | 靠外部 | 靠外部 | TraceCollector 内置 |
+| 安全治理 | 无 | 无 | GovernanceEngine |
+| 降级架构 | 无 | 无 | FakeEmbedder + 规则引擎兜底 |
+
+
+
 **八股文考点**：
 - Agent 系统架构设计
 - 运行时沙箱（Runtime Sandbox）概念
@@ -146,6 +196,45 @@ message_bus.publish(Message(
 ## 二、LLM 驱动 Orchestrator
 
 ### Q5：你的 Orchestrator 是怎么用 LLM 做动态编排的？和传统的硬编码 Pipeline 有什么区别？
+
+**八股文知识 — Agent 编排范式**
+
+```
+范式 1: 硬编码 Pipeline
+  代码：Pipeline([parser, extractor, recommender])
+  问题：流程固定，一个节点挂了整条链就断了，加新功能要改代码
+  
+范式 2: 条件路由（If/Else）
+  代码：if intent == "parse": parser() elif intent == "chat": chat()
+  问题：分支爆炸式增长，新需求加个 elif
+  
+范式 3: LLM as Planner（我们用的）
+  LLM 输出 JSON 计划：{"steps": [{"capability": "fit_parsing", "input": {...}}, ...]}
+  问题：LLM 偶尔输出格式错、计划不可执行
+  解法：Planner 输出 + PlanParser 校验 + 规则兜底
+  
+范式 4: Agent Loop（ReAct）
+  while not done: think → act → observe
+  问题：Token 消耗大、速度慢、容易陷入循环
+```
+
+**为什么选范式 3 而不是 4？**
+- 范式 3：先规划后执行，Token 省、可调试、可提前发现计划问题
+- 范式 4：边想边做，灵活但不可控
+- 我们实际上两者结合：Orchestrator 做计划（范式3），ReActAgent 做单步内的推理（范式4）
+
+**Plan 的数据结构设计**（为什么是 `capability` 而不是 `agent_id`）：
+```python
+@dataclass
+class PlanStep:
+    required_capability: str  # "fit_parsing" 而非 "parser_agent"
+    input_data: Dict
+    fallback_capability: Optional[str]  # 主能力挂了用什么替代
+    retry_limit: int = 2
+```
+用 capability 解耦的好处：Agent 可以随时替换、新增 Agent 不需要改 Planner Prompt。
+
+
 
 **八股文考点**：
 - LLM 作为 Planner（LLM as Planner）
@@ -507,6 +596,44 @@ def detect_pii(text):
 
 ### Q14：Working/Episodic/Semantic 三层记忆分别存什么？
 
+**八股文知识 — 认知科学中的记忆模型**
+
+```
+人类认知心理学的 Memory 模型（Endel Tulving, 1972）：
+
+Sensory Memory（感觉记忆）    → 视觉/听觉/触觉，持续 200-500ms
+  └─ 计算机类比：CPU 寄存器
+
+Working Memory（工作记忆）     → 同时容纳 7±2 个 chunk，持续几秒到几分钟
+  └─ 计算机类比：CPU Cache L1/L2，当前正在处理的上下文
+  
+Episodic Memory（情节记忆）    → 具体事件的时空记忆，"我上次在跑步机跑了30分钟"
+  └─ 计算机类比：数据库中的执行日志、历史对话片段
+  
+Semantic Memory（语义记忆）    → 抽象知识和事实，"VO2max 是最大摄氧量"
+  └─ 计算机类比：知识库、向量数据库中的文档、用户画像
+```
+
+**为什么要分层？不能全存一个地方吗？**
+- 全存内存 → 放不下、重启丢失
+- 全存磁盘 → 每次查磁盘太慢
+- 分层的核心思想：**热数据在内存，温数据在磁盘，冷数据归档**
+
+**和 Redis 的对比**：
+- 我们的三层 Working/Episodic/Semantic ≈ Redis 的三级缓存（L1/L2/DB 持久化）
+- 但我们多了**语义检索**（TF-IDF 或 Embedding），Redis 只做 key-value 查找
+
+**生命周期管理（晋升/蒸馏/衰减）**：
+
+```
+Working 条目 ── access_count >= 3 ──→ Episodic
+Episodic 条目 ── 被引用 >= 5 次 ──→ Semantic（蒸馏合并）
+Semantic 条目 ── 30天未访问 ──→ 降级到 Episodic（衰减）
+```
+
+这其实是借鉴了 Redis 的 **TTL + LRU** 过期策略，但加了语义层的判断（不是纯时间过期）。
+
+
 **八股文考点**：
 - 分级记忆体系（Hierarchical Memory）
 - 记忆增强（Memory Augmentation）
@@ -828,6 +955,56 @@ class SessionLog:
 
 ### Q22：三层降级架构（Embedder/Orchestrator/Agent）分别怎么降级？
 
+**八股文知识 — 系统降级设计模式**
+
+```
+模式 1: Circuit Breaker（熔断器）
+  状态：Closed（正常）→ Open（熔断）→ Half-Open（试探）
+  触发：错误率超过阈值（如 50%）
+  恢复：冷却时间后放一条请求试探
+  
+模式 2: Bulkhead（舱壁隔离）
+  每个功能独立资源池，一个炸了不影响其他
+  线程池隔离、连接池隔离
+  
+模式 3: Fallback（降级返回）
+  主功能失败时返回默认值或执行替代逻辑
+  缓存返回、Mock 数据、规则引擎兜底
+  
+模式 4: Timeout（超时控制）
+  每个调用设超时，不阻塞整个流程
+  
+模式 5: Retry with Backoff（带退避重试）
+  失败后自动重试，间隔指数增长：1s → 2s → 4s → 8s
+```
+
+**我们的降级策略属于哪种？**
+- FakeEmbedder → Fallback（降级返回伪向量）
+- 规则引擎兜底 LLM → Fallback
+- L1 重试 / L2 策略切换 / L3 优雅降级 → Circuit Breaker + Fallback 组合
+
+**为什么 FakeEmbedder 用哈希生成向量？**
+
+MD5 生成 32 位十六进制 → 取每两位转 0-15 → 归一化到单位向量：
+```python
+hash_bytes = hashlib.md5(text.encode()).digest()  # 16 bytes
+raw = [b / 255.0 for b in hash_bytes]  # 16 个 0-1 浮点数
+# 扩展到 384 维（和 MiniLM 一致）
+# → 归一化
+norm = math.sqrt(sum(x**2 for x in raw))
+vector = [x / norm for x in raw]
+```
+
+**它能用来做检索吗？**
+- 不能替代真实 Embedding
+- 但能让向量库保持功能（写入→检索→相似度计算全链路不断）
+- 真实 Embedding 加载成功后自动切换
+
+**面试钩子**：
+> "降级架构不是偷懒不用真实组件，是**确保系统在任何环境下都能跑通核心链路**。Demo 零配置可运行、生产环境故障不中断——这是两个不同的需求，但用同一套架构同时满足。面试官如果问'你为什么不用真实模型'，反而是他没理解降级架构的价值。"
+
+
+
 **八股文考点**：
 - 降级设计（Graceful Degradation）
 - 容错架构（Fault-Tolerant Architecture）
@@ -1147,6 +1324,302 @@ class AutoClassifyAgent(BaseAgent):
 ---
 
 ## 十一、RAG 知识库增强
+
+---
+
+## 十二、用户系统与数据隔离（近期新增，面试官最爱问）
+
+### Q35：你的用户注册和鉴权是怎么做的？为什么不用 JWT？
+
+**八股文知识 — 主流认证方案对比**
+
+| 方案 | 原理 | 优点 | 缺点 |
+|------|------|------|------|
+| **Session + Cookie** | 服务端存 session_id（Redis/内存），Cookie 带回 | 服务端可控、可主动失效、成熟稳定 | 服务端要维护状态、跨域麻烦 |
+| **JWT (JSON Web Token)** | 无状态 Token，签名防止篡改，Payload 含用户信息 | 服务端无状态、跨域友好、分布式易扩展 | 无法主动失效（只能黑名单）、Payload 膨胀、密钥泄露灾难 |
+| **HMAC-SHA256 自签名** | 自定义格式，HMAC 签名防止篡改 | 轻量、可控、无依赖 | 自研安全方案需谨慎审计 |
+| **OAuth 2.0** | 第三方授权，Access Token + Refresh Token | 标准协议、支持第三方登录 | 复杂度高、实现成本大 |
+
+JWT 由三部分组成：`Header.Payload.Signature`
+- Header: `{"alg": "HS256", "typ": "JWT"}`
+- Payload: `{"sub": "user_123", "exp": 1234567890, "role": "admin"}`
+- Signature: `HMAC-SHA256(secret, base64(header) + "." + base64(payload))`
+
+> **JWT 的坑**：Payload 是 Base64 编码的，不是加密！任何人都能解码看到里面的内容。所以不要放敏感信息。过期校验是客户端（或网关）做的，后端只验签。
+
+**项目答案**：
+
+我们用了 **自研的 HMAC-SHA256 Token**，格式：`user_id:role:timestamp:signature`
+
+```python
+# app/auth/auth.py
+def create_token(user: AuthUser) -> str:
+    timestamp = int(time.time())
+    payload = f"{user.user_id}:{user.role.value}:{timestamp}"
+    sig = hmac.new(_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+```
+
+**为什么不直接用 JWT？**
+1. **Demo 零依赖**：不需要 `pyjwt` 或 `python-jose` 包
+2. **可控性**：格式完全自己定义，方便调试
+3. **体量小**：整个 auth.py 只有 253 行，逻辑一目了然
+4. **和降级架构一致**：HMAC 是"FakeEmbedder 替代 SentenceTransformer"的同思路——不引重型依赖
+
+**但如果生产环境，我会选 JWT（HS256）**：
+```python
+# 生产推荐写法
+import jwt
+token = jwt.encode({"sub": user_id, "role": role}, SECRET, algorithm="HS256", expires_delta=timedelta(hours=1))
+```
+
+---
+
+### Q36：注册时密码怎么存的？为什么不能明文存？
+
+**八股文知识 — 密码哈希算法演进**
+
+```
+明文存储 ❌    → 数据库泄露 = 全部密码泄露
+MD5      ❌    → 彩虹表攻击，已经被破解
+SHA-1    ❌    → 已经被碰撞攻击
+SHA-256  ⚠️    → 加了盐勉强可用，但计算太快容易被暴力破解
+bcrypt    ✅    → 自适应慢算法（cost factor 可调），专为密码设计
+Argon2    ✅✅  → 最新 winner（Password Hashing Competition），抗 GPU 暴力破解
+PBKDF2   ✅    → NIST 推荐，迭代次数可调
+```
+
+**bcrypt 的 cost factor 是什么？**
+- 每增加 1，计算量翻倍
+- cost=10 → ~100ms 一次
+- cost=12 → ~400ms 一次
+- 这就是故意慢！暴力破解的 GPU 每秒能算几十亿次 SHA256，但 bcrypt 只能算几百次
+
+**项目答案**：
+
+Demo 级别用了 **SHA-256 + 简单盐**（其实就是直接 SHA-256），真实生产应该用 bcrypt/Argon2：
+
+```python
+# 当前 Demo（够用但不够安全）
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# 生产环境应该改成（面试主动说出来）
+import bcrypt
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+def _verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+```
+
+> **面试钩子**："Demo 用了 SHA-256 哈希，但我知道生产级密码存储的三条铁律：1) 不能明文；2) 不能用快哈希（MD5/SHA）；3) 必须加盐。bcrypt/Argon2 是正确选择，cost factor 调到 10-12 可以在安全性和用户体验之间取平衡。"
+
+---
+
+### Q37：用户数据隔离做了哪几层？
+
+**八股文知识 — 多租户隔离策略**
+
+| 策略 | 实现方式 | 隔离程度 | 成本 |
+|------|----------|----------|------|
+| **独立数据库** | 每个租户一个 DB 实例 | 完全隔离，物理级 | 高 |
+| **独立 Schema** | 同一 DB 不同 Schema | 逻辑隔离 | 中 |
+| **共享 DB + user_id 字段过滤** | `WHERE user_id = ?` | 应用层隔离 | 低 |
+| **行级安全（RLS）** | PostgreSQL 原生支持 | 数据库层强制 | 中 |
+
+**RBAC（基于角色的访问控制）核心概念**：
+- Subject（主体）：用户、进程
+- Object（客体）：资源（数据、API）
+- Permission（权限）：对客体能做什么操作
+- Role（角色）：权限的集合
+- Assignment（分配）：主体 → 角色 的映射
+
+**项目答案**：
+
+我们实现了 **三层隔离**，是"共享 DB + user_id 过滤"策略：
+
+```
+Layer 1: SessionHarness 隔离（app/harness/session_harness.py）
+  └─ 每个用户独立的 Harness 实例
+  └─ Blackboard 用 user_id 作为命名空间前缀
+     blackboard.write("user_123", "activity_001", data)
+     blackboard.read("user_456", "activity_001") → None ✅
+
+Layer 2: MemoryPool 隔离（app/memory/memory_pool.py）
+  └─ 每个用户独立的记忆池实例
+  └─ 记忆自动带 user_id metadata
+     memory.store(content, metadata={"user_id": "user_123"})
+
+Layer 3: 数据库过滤（app/db/database.py）
+  └─ 所有查询强制 WHERE user_id = ?
+  └─ get_user_dashboard(user_id="user_123")
+     → SELECT * FROM activities WHERE user_id = "user_123"
+     → 不会泄露其他用户数据
+```
+
+**前端也要配合**：DashboardPage 调用 API 时传自己的 user_id，不能让用户随便传别人的。
+```python
+# 后端 API 设计（简化鉴权）
+@router.get("/dashboard/summary")
+def dashboard_summary(user_id: str = Query(...)):
+    # Demo 级：前端传谁就查谁，因为已登录+内存级用户隔离
+    # 生产级：应该从 Token 中解 user_id，不信任前端参数
+    return database.get_user_dashboard(user_id)
+```
+
+---
+
+### Q38：管理员和普通用户怎么区分？RBAC 是怎么实现的？
+
+**八股文知识 — 权限控制模型**
+
+```
+ACL (Access Control List)：每个资源列谁能访问
+  └─ 资源 → [用户A: 读写, 用户B: 读, ...]
+  └─ 优点：直观、灵活
+  └─ 缺点：资源多了 ACL 爆炸
+
+RBAC (Role-Based Access Control)：用户 → 角色 → 权限
+  └─ 用户A → [管理员] → [所有权限]
+  └─ 用户B → [普通用户] → [读+写自己的数据]
+  └─ 优点：角色少、权限集中管理
+  └─ 缺点：角色爆炸（需要 RBAC1/RBAC2/RBAC3 变体解决）
+
+ABAC (Attribute-Based Access Control)：基于属性动态判断
+  └─ if user.department == resource.owner.department → allow
+  └─ 优点：最灵活
+  └─ 缺点：规则多了难维护
+```
+
+**项目答案**：
+
+```python
+# app/auth/auth.py — 简单 RBAC
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
+
+class AuthUser:
+    user_id: str
+    username: str
+    role: UserRole
+    
+    @property
+    def is_admin(self) -> bool:
+        return self.role == UserRole.ADMIN
+
+# 路由层用 FastAPI Depends 注入
+@router.get("/knowledge/upload")
+def knowledge_upload(user: AuthUser = Depends(require_admin)):
+    # 只有 admin 能进知识库管理
+
+@router.post("/activities")  
+def upload_activity(user: AuthUser = Depends(require_user)):
+    # 登录用户都能上传
+```
+
+管理员默认账号：`admin` / `wenyasports2024`，写死在代码里（Demo 级）。生产环境应该放到环境变量或数据库中。
+
+---
+
+### Q39：前端用户状态怎么管理的？刷新页面还能保持登录吗？
+
+**八股文知识 — 前端状态持久化**
+
+```
+方案一：localStorage 存 Token
+  └─ 优点：简单、跨标签页、刷新不丢
+  └─ 缺点：XSS 可以偷 Token（不要存敏感信息）、永久不过期
+
+方案二：sessionStorage
+  └─ 优点：同源、标签页关闭即清空
+  └─ 缺点：刷新不丢，但换标签页重新登录
+
+方案三：Cookie（httpOnly + SameSite）
+  └─ 优点：httpOnly 防 XSS、自动随请求、Secure 防中间人
+  └─ 缺点：CSRF 风险、需要后端 Set-Cookie
+
+方案四：Redux/Zustand + 持久化中间件
+  └─ 和状态管理结合，本质还是 localStorage/sessionStorage
+```
+
+**项目答案**：
+
+我们用了 **localStorage + React Context** 的组合：
+
+```javascript
+// frontend/src/AuthContext.jsx
+// 登录成功后存 Token
+localStorage.setItem('wenyasports_token', res.token)
+localStorage.setItem('wenyasports_user', JSON.stringify(res.user))
+
+// 页面加载时从 localStorage 恢复
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('wenyasports_user')
+    return saved ? JSON.parse(saved) : null
+  })
+  
+  // axios 拦截器：每次请求自动带 Token
+  useEffect(() => {
+    api.interceptors.request.use(config => {
+      const token = localStorage.getItem('wenyasports_token')
+      if (token) config.headers.Authorization = `Bearer ${token}`
+      return config
+    })
+  }, [])
+}
+```
+
+**刷新能保持登录** ✅ — 因为 localStorage 持久化
+**关闭浏览器重开也保持** ✅ — 同上
+**Token 过期了怎么办？** — 当前 Demo 不处理过期（Token 无过期机制），生产应该在拦截器里加 401 拦截 + 自动跳转登录页
+
+---
+
+### Q40：你这个鉴权系统有什么安全漏洞？生产环境会怎么修？
+
+**八股文知识 — OWASP Top 10（API 安全）**
+
+```
+1. Broken Object Level Authorization（BOLA）
+   → 你的 API 允许用户通过改参数访问别人的数据
+   → GET /api/users/123/activities → 改成 /api/users/456/activities 就看到别人的数据了
+
+2. Broken Authentication
+   → 弱密码、无限次登录尝试、会话固定攻击
+
+3. Broken Object Property Level Authorization（BFLA）
+   → 不该暴露的字段被返回了（比如 API 返回了 password_hash）
+
+4. Unrestricted Resource Consumption
+   → 没限速，被刷爆
+
+5. Broken Function Level Authorization（BFLA）
+   → 普通用户能调到管理员接口
+```
+
+**项目答案**：
+
+当前 Demo 级鉴权的安全问题：
+
+| 问题 | 严重程度 | 生产修复 |
+|------|---------|---------|
+| Token 无过期时间 | 🔴 高 | 加 `exp` 字段，1小时过期 + Refresh Token |
+| 密码直接 SHA-256 | 🔴 高 | 用 bcrypt/Argon2 |
+| 管理员密码硬编码 | 🔴 高 | 环境变量或数据库 |
+| dashboard 接口没从 Token 解 user_id | 🟡 中 | 后端 `user_id` 从 Token 解，不信任前端 Query 参数 |
+| 无登录限速 | 🟡 中 | 加 rate limit（`slowapi` 库） |
+| localStorage 存 Token（XSS 风险） | 🟡 中 | 改用 httpOnly Cookie |
+| 无 HTTPS | 🟡 中 | 生产必须 HTTPS |
+| CORS 全开 | 🟢 低 | 生产限制允许的 Origin |
+
+> **面试钩子**："我很清楚 Demo 级鉴权和生产级的差距。面试时主动列出来这些问题，然后说清楚每一个怎么修——这不是暴露缺点，是展示你有安全意识和实战经验。面试官更看重你知道哪些是坑、怎么填，而不是只会写 Demo。"
+
+---
+
+
 
 ### Q29：你的 RAG 是怎么切块（Chunking）的？为什么选这个策略？
 
