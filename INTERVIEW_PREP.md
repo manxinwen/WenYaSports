@@ -201,6 +201,448 @@ React 页面数量:       19 个（Dashboard/Chat/Upload/DecisionExplainability/
 
 ---
 
+---
+
+## 🧠 十个 Agent 完整清单（精确到 capability）
+
+> **重要说明**：项目里有两种"Agent"：
+> - **Harness 注册的核心 Agent（5 个）** — 由 `harness_setup.py` 初始化，注册到 AgentRegistry，Orchestrator 通过 capability 匹配调度
+> - **Orchestrator 内部的辅助模块（5 个）** — 不注册到 Harness，直接被 Orchestrator 实例化，负责质量闭环和决策辅助
+
+### 核心 Agent（5 个，Harness 注册，可被 Orchestrator 调度）
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  1. ParserAgent  — 数据解析专家                                              │
+│  ─────────────────────────────────────────                                  │
+│  文件: app/agents/parser_agent.py                                           │
+│  Capabilities:  fit_parsing · data_extraction · metadata_parsing            │
+│  Dependencies:  无                                                           │
+│  输入:          .fit 文件路径 / .csv 文件路径                                │
+│  输出:          ParsedActivity 对象（时间序列 + 统计摘要）                    │
+│  做什么:        解析 Garmin FIT 二进制协议 / 标准 CSV                         │
+│                 → 提取每秒钟的心率/配速/海拔/步数/卡路里                    │
+│                 → 自动识别运动类型（跑步/骑行/游泳）                          │
+│                 → 处理 FIT 协议的 record header 校验、CRC 验证               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  2. FeatureExtractorAgent — 特征工程专家                                    │
+│  ─────────────────────────────────────────                                  │
+│  文件: app/agents/feature_extractor_agent.py                                │
+│  Capabilities:  feature_engineering · statistics · intensity_distribution   │
+│  Dependencies:  fit_parsing（需要 Parser 先跑完）                            │
+│  输入:          ParsedActivity 对象                                          │
+│  输出:          FeatureSummary（聚合指标 + 训练强度分布）                    │
+│  做什么:        计算距离、时长、累计爬升/下降                                │
+│                 → 划分心率区间（Zone 1-5）并计算各区间占比                    │
+│                 → 统计配速分布、步频分布、功率分布                             │
+│                 → 识别训练峰值（最高心率、最快配速、最大摄氧量估算）           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  3. MemoryAgent — 记忆管理专家                                              │
+│  ─────────────────────────────────────────                                  │
+│  文件: app/agents/memory_agent.py                                           │
+│  Capabilities:  user_profile · context_retrieval · memory_update            │
+│  Dependencies:  无                                                           │
+│  输入:          user_id / context_query / data_to_store                     │
+│  输出:          UserContext（用户画像 + 历史训练摘要）                        │
+│  做什么:        从 SQLite 加载用户所有历史活动                               │
+│                 → 从分级记忆（Working/Episodic/Semantic）检索相关经验       │
+│                 → 更新用户画像（新活动入库、统计数据刷新）                   │
+│                 → 记忆晋升/蒸馏/衰减生命周期管理                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  4. RecommendationAgent — 训练建议专家                                      │
+│  ─────────────────────────────────────────                                  │
+│  文件: app/agents/recommendation_agent.py                                   │
+│  Capabilities:  training_advice · rule_engine · llm_generation              │
+│  Dependencies:  feature_engineering + user_profile                          │
+│  输入:          FeatureSummary + UserContext                                │
+│  输出:          Recommendation（训练建议 + 营养建议 + 下次训练计划）          │
+│  做什么:        规则引擎匹配训练类型 → 触发 LLM 生成个性化建议               │
+│                 → 结合 RAG 知识库（运动生理学/营养学）                        │
+│                 → 识别过度训练风险、给出恢复建议                             │
+│                 → 制定周期化训练计划（基础期/强化期/峰值期）                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  5. ReActAgent — 工具使用与推理专家                                         │
+│  ─────────────────────────────────────────                                  │
+│  文件: app/agents/reaact_agent.py                                           │
+│  Capabilities:  tool_calling · reasoning · multi_step_planning              │
+│  Dependencies:  memory_update + training_advice                            │
+│  输入:          用户自然语言问题                                             │
+│  输出:          ChatResponse（最终回答 + 中间推理链 + 工具调用记录）          │
+│  做什么:        ReAct 循环：Thought → Action → Observation → ... → Answer   │
+│                 → 绑定 PluginManager 的 18 个 MCP Tools                      │
+│                 → ToolResultValidator + ToolErrorRecovery 处理异常           │
+│                 → 失败自动 retry / 降级 / 换工具                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Orchestrator 内部辅助模块（5 个，质量闭环 + 决策辅助）
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  6. EvaluatorAgent — 质量评估器                                             │
+│  文件: app/agents/evaluator_agent.py (555 行)                               │
+│  被谁用: Orchestrator.execute_goal() 的质量闭环阶段                          │
+│  输入: 上一步 Agent 的产出                                                  │
+│  输出: EvaluationResult（5 维度分数 + 通过/未通过判定）                     │
+│  5 维度: accuracy(准确性) · completeness(完整性) · relevance(相关性)         │
+│          format(格式规范) · actionability(可操作性)                          │
+│  两种模式: BuiltinEvaluationRules（规则，零 LLM） / LLM（深度评估）           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  7. ReflectionEngine — 失败反思引擎                                         │
+│  文件: app/agents/reflection_engine.py                                      │
+│  被谁用: EvaluatorAgent 判断未通过时触发                                     │
+│  输入: 失败的产出 + 执行历史                                                 │
+│  输出: Reflection（根因分析 + 改进策略 + 置信度）                           │
+│  做什么: 分析"为什么失败" → 生成改进建议 → 存入 Episodic Memory              │
+│         → 下次遇到类似场景自动检索避免重蹈覆辙                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  8. Guardrails — 输出安全守卫                                               │
+│  文件: app/agents/guardrails.py                                             │
+│  被谁用: Orchestrator 产出最终返回前                                         │
+│  三层守卫:                                                                  │
+│    • FormatGuard — JSON schema 校验、必填字段检查                            │
+│    • ContentGuard — 敏感词过滤、有害内容检测                                  │
+│    • QualityGuard — 最小长度、结构完整性                                     │
+│  输出不通过时: 自动重生成 / 截断 / 返回安全兜底                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  9. UncertaintyQuantifier — 不确定性量化器                                   │
+│  文件: app/agents/uncertainty_quantifier.py (599 行)                         │
+│  被谁用: Orchestrator 决策阶段 + 前端 DecisionExplainabilityPage             │
+│  做什么: 判断 LLM 输出的置信度（高/中/低/极低）                              │
+│         → 标记证据来源（knowledge_base / llm_inference / user_history）     │
+│         → 置信度低时触发"请确认"提示                                          │
+│  证据类型: FACTUAL(事实) · STATISTICAL(统计) · INFERENTIAL(推理)            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  10. CoordinatorAgent — Agent 协商协调器                                     │
+│  文件: app/agents/coordinator_agent.py                                      │
+│  被谁用: Orchestrator._try_negotiate_agent() 当多个 Agent 争抢同一能力时     │
+│  做什么: 多 Agent 能力冲突时自动协商                                         │
+│          0.6 × quality_score + 0.4 × confidence_score 综合评分               │
+│          → 分高者胜出执行，分低者提供 fallback                               │
+│  协商类型: CAPABILITY_DISPUTE · QUALITY_DEBATE · FALLBACK_SELECTION          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔗 Agent 之间是怎么互相联系的
+
+### 连接架构图
+
+```
+                         ┌─────────────────────┐
+                         │   LLMOrchestrator   │
+                         │   (1199 行)          │
+                         │                     │
+                         │  感知: 从 Registry   │
+                         │  读取全部 Agent 列表 │
+                         │  注入 Planner prompt │
+                         │                     │
+                         │  决策: 生成 JSON     │
+                         │  ExecutionPlan       │
+                         │  按 capability 匹配 │
+                         └─────────┬───────────┘
+                                   │
+                                   │ 调度 (schedule_agent)
+                                   ▼
+              ┌──────────────────────────────────────┐
+              │                                      │
+    ┌─────────▼──────────┐              ┌────────────▼───────────┐
+    │   AgentRegistry    │              │     Blackboard         │
+    │   (能力索引)        │              │   (共享黑板 · 命名空间)   │
+    │                    │              │                        │
+    │ fit_parsing → [p]  │              │ "user_001" /            │
+    │ feature_eng → [f]  │              │   "parsed_activity"     │
+    │ user_profile → [m] │              │   → {...}              │
+    │ training_advice→[r]│              │                        │
+    │ tool_calling → [x] │              │ "user_001" /            │
+    │                    │              │   "features"           │
+    └─────────┬──────────┘              │   → {...}              │
+              │                         └────────────┬───────────┘
+              │                                      │
+              ▼                                      │ 读写共享状态
+    ┌──────────────────┐                             │
+    │   MessageBus     │◄────────────────────────────┘
+    │  (异步消息总线)   │
+    │                  │
+    │ 订阅模式:         │
+    │  • subscribe_type │ → 按消息类型订阅 (AGENT_COMPLETED, GOVERNANCE_ALERT)
+    │  • subscribe      │ → 按目标 Agent 订阅
+    │                  │
+    │ 消息流向:         │
+    │  parser ─completed─► memory (通知解析完成)
+    │  memory ─profile─► recommender (推送新画像)
+    │  governance ─alert─► orchestrator (预算超限告警)
+    └──────────────────┘
+```
+
+### 三种通信模式对比
+
+| 模式 | 谁用 | 特点 | 代码位置 |
+|------|------|------|----------|
+| **直接调用** | Orchestrator → Agent | 同步，知道 agent_id 直接 `agent.run(input)` | `llm_orchestrator.py` `schedule_agent()` |
+| **Blackboard 共享** | Agent ↔ Agent | 异步解耦，通过命名空间读写数据 | `blackboard.py` `write(ns, key, val)` / `read(ns, key)` |
+| **MessageBus 消息** | Agent → Agent / Orchestrator | 发布订阅，类型过滤，支持链式触发 | `message_bus.py` `publish(msg)` / `subscribe_type(type, handler)` |
+
+### 实际通信举例：解析 → 分析 → 建议 完整链路
+
+```
+时间轴 →
+
+[Orchestrator 感知]
+  ├─ 从 Registry 读取: parser[fit_parsing], feature_extractor[feature_engineering],
+  │   memory[user_profile], recommender[training_advice]
+  └─ 注入 LLM Planner prompt: "- **parser** (FIT Parser): [fit_parsing, data_extraction, metadata_parsing]"
+
+[Orchestrator 决策]
+  ├─ LLM 输出 ExecutionPlan JSON:
+  │   Step 1: agent_id="parser",    capability="fit_parsing",         input="file_path",     output="parsed"
+  │   Step 2: agent_id="feature_extractor", capability="feature_engineering", input="parsed", output="features"
+  │   Step 3: agent_id="memory",     capability="user_profile",        input="user_id",       output="context"
+  │   Step 4: agent_id="recommender", capability="training_advice",    input="features",      output="advice"
+  │   fallback_plan: [Step 1 用 parser → Step 2 降级用 rule_engine]
+  └─ 规则兜底: 如果 LLM 不可用 → 硬编码 Pipeline 按 capability 顺序调度
+
+[执行 Step 1: ParserAgent]
+  ├─ Orchestrator 调度: agent = registry.get_instance("parser")
+  │                      agent.run(file_path="/path/to/activity.fit")
+  ├─ Parser 内部: 读 FIT 二进制 → 校验 header → 解析 records → 提取统计
+  ├─ Parser 通过 Blackboard 写: blackboard.write("user_001", "parsed_activity", result)
+  ├─ Parser 通过 MessageBus 发: message_bus.publish(Message(
+  │       sender="parser", message_type=AGENT_COMPLETED, payload=result))
+  └─ Orchestrator 收到 AGENT_COMPLETED → 触发 Step 2
+
+[执行 Step 2: FeatureExtractorAgent]
+  ├─ Orchestrator 调度: input 从 results["parsed"] 取 (上一步 output_key)
+  ├─ FeatureExtractor 内部: 调用 blackboard.read("user_001", "parsed_activity") 取数据
+  ├─ 计算心率区间、配速分布、训练强度
+  └─ 结果写 Blackboard + 发布 MessageBus
+
+[执行 Step 3: MemoryAgent 并行]
+  ├─ 读取用户历史活动 → 从分级记忆检索相似案例
+  ├─ 构建 UserContext（历史 PR、训练周期、恢复状态）
+  └─ 结果写 Blackboard（供 Step 4 使用）
+
+[执行 Step 4: RecommendationAgent]
+  ├─ 拿到 FeatureSummary + UserContext
+  ├─ 规则引擎匹配训练类型 → 触发 LLM 生成
+  ├─ 同时查 RAG 知识库（"跑步过量训练怎么恢复？"）
+  └─ 输出个性化训练建议 + 营养建议
+
+[质量闭环]
+  ├─ EvaluatorAgent.evaluate(recommendation, dimensions=[accuracy, completeness, ...])
+  ├─ 如果 score < 0.7 → ReflectionEngine.reflect_on_failure() → 分析根因 → 存记忆
+  └─ Guardrails.check(final_output) → JSON schema 校验 → 不通过则重生成
+
+[不确定性量化 + 可解释性]
+  ├─ UncertaintyQuantifier.quantify(advice) → confidence=0.82, evidence=FACTUAL+INFERENTIAL
+  └─ DecisionExplainabilityPage 前端展示决策链：
+     "parser → feature_extractor → memory → recommender → ✅"
+     "协商过程: [无冲突，recommender 能力匹配度 0.92]"
+     "不确定性: 训练建议部分 confidence=0.82，依据: 历史数据 + RAG 检索"
+```
+
+---
+
+## 🧭 LLM 是怎么感知和决策的
+
+### 感知：把 Agent 能力注入 Prompt
+
+```python
+# app/orchestrator/llm_orchestrator.py L1161
+def _format_agent_capabilities(self) -> str:
+    agents = self.harness.registry.list_agents()
+    lines = []
+    for a in agents:
+        caps = ", ".join(a.get("capabilities", []))
+        lines.append(f"- **{a['agent_id']}** ({a['name']}): [{caps}] | 状态: {a['status']}")
+    return "
+".join(lines)
+```
+
+**LLM 实际收到的 System Prompt 长这样：**
+
+```
+你是一个多智能体系统的编排引擎。你的任务是根据用户目标和可用的 Agent 能力，生成最优的执行计划。
+
+## 可用 Agent 及其能力
+- **parser** (FIT Parser): [fit_parsing, data_extraction, metadata_parsing] | 状态: idle
+- **feature_extractor** (Feature Extractor): [feature_engineering, statistics, intensity_distribution] | 状态: idle
+- **memory** (Memory Manager): [user_profile, context_retrieval, memory_update] | 状态: idle
+- **recommender** (Recommendation Engine): [training_advice, rule_engine, llm_generation] | 状态: idle
+- **react** (ReAct Agent): [tool_calling, reasoning, multi_step_planning] | 状态: idle
+
+## 规划原则
+1. 能力匹配：选择最匹配子任务的 Agent，而非硬编码顺序
+2. 依赖感知：确保后续步骤的输入依赖于前序步骤的输出
+3. 容错设计：为主计划中的每个关键步骤设计降级方案
+...
+```
+
+### 决策：LLM 输出 JSON ExecutionPlan
+
+```json
+{
+  "goal": "分析这份运动数据并给出建议",
+  "plan": [
+    {"step": 1, "agent_id": "parser", "capability": "fit_parsing",
+     "input_key": "file_path", "output_key": "parsed",
+     "reasoning": "需要先解析 FIT 文件才能进行后续分析"},
+    {"step": 2, "agent_id": "feature_extractor", "capability": "feature_engineering",
+     "input_key": "parsed", "output_key": "features",
+     "reasoning": "依赖 Step 1 输出，提取训练指标"},
+    {"step": 3, "agent_id": "memory", "capability": "user_profile",
+     "input_key": "user_id", "output_key": "context",
+     "reasoning": "获取用户历史画像以个性化建议"},
+    {"step": 4, "agent_id": "recommender", "capability": "training_advice",
+     "input_key": "features", "output_key": "advice",
+     "reasoning": "依赖特征和画像，生成训练建议"}
+  ],
+  "fallback_plan": [
+    {"step": 1, "agent_id": "parser", ...},
+    {"step": 2, "agent_id": "recommender", "capability": "rule_engine",
+     "input_key": "parsed", "output_key": "advice",
+     "reasoning": "feature_extractor 挂了，直接用规则引擎给建议"}
+  ],
+  "confidence": 0.88,
+  "reasoning": "从 FIT 解析 → 特征提取 → 画像加载 → 建议生成，数据流向清晰，每个 Agent 依赖都得到满足"
+}
+```
+
+### LLM 不可用时的规则兜底
+
+```python
+# app/orchestrator/llm_orchestrator.py
+if self.llm_client is None:
+    # 硬编码 Pipeline 按 capability 顺序调度
+    return self._rule_based_plan(goal, input_data)
+
+# _rule_based_plan 做了什么：
+# 1. 从 Registry 按依赖拓扑排序 Agent
+# 2. 如果用户目标含"文件" → 强制 parser 第一步
+# 3. 如果目标含"建议/分析" → 强制 recommender 最后一步
+# 4. 中间自动插 memory（加载画像）
+```
+
+### 重规划（Replanning）触发逻辑
+
+```
+执行 Step N 失败
+  │
+  ├─ L1: 直接 retry 同 Agent（默认 2 次）
+  │   └─ agent.run() 重跑
+  │
+  ├─ L2: 换同 capability 的其他 Agent
+  │   └─ registry.find_agent(capability) → 找替代 Agent
+  │   └─ 触发协商协议（如果有多个候选）
+  │
+  ├─ L3: 调用 LLM 重规划
+  │   └─ PLANNER_REPLAN_PROMPT 注入执行历史
+  │   └─ "parser 成功了，feature_extractor 挂了，memory 成功了，请重新规划"
+  │   └─ max_replanning=3，超过后走 fallback_plan
+  │
+  └─ L4: 彻底失败 → 返回部分结果 + 错误分析
+```
+
+---
+
+## 🛠️ 全部 18 个 MCP Tools（来自 5 个插件）
+
+> **ReActAgent 是唯一直接调 Tool 的 Agent**，绑定 `PluginManager` 管理全部工具。
+> 工具以 **OpenAI Function Calling** 格式注册：每个工具有 `name` / `description` / `parameters(JSON Schema)`。
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  插件 1: weather（天气查询）— 1 个 Tool                                     │
+│  ─────────────────────────────────────────                                 │
+│  get_current_weather(city?)          获取实时天气（温度/体感/湿度/风速）      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  插件 2: map_routing（运动路线规划）— 1 个 Tool                             │
+│  ─────────────────────────────────────────                                 │
+│  get_route_profile(start, end, profile?)  计算路线（距离/时间/爬升/下降）    │
+│                                              profile: running/cycling/... │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  插件 3: strava（Strava 数据同步）— 7 个 Tools                              │
+│  ─────────────────────────────────────────                                 │
+│  get_athlete_profile()               运动员基本资料（姓名/城市/体重）        │
+│  get_athlete_stats()                 累计统计（总里程/活动次数/总时长）      │
+│  list_activities(days?, limit?, sport_type?)  列出近期活动                  │
+│  get_activity_detail(activity_id, include_stream?)  活动详情 + 指标         │
+│  get_activity_streams(activity_id, keys?)   秒级数据（HR/配速/功率/海拔）   │
+│  get_gear_mileage()                  装备累计里程                            │
+│  sync_to_activities(days?)           Strava → WenYaSports 同步               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  插件 4: sports_venues（运动场馆）— 4 个 Tools                              │
+│  ─────────────────────────────────────────                                 │
+│  search_venues(keyword, city?, radius?, venue_type?)  搜索场馆              │
+│  get_venue_types()                   所有场馆类型列表                       │
+│  get_venue_detail(poi_id)            场馆详情                                │
+│  search_nearby_by_location(lng, lat, keyword?, radius?)  附近场馆           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  插件 5: social_share（社交分享）— 4 个 Tools                               │
+│  ─────────────────────────────────────────                                 │
+│  generate_activity_share(activity_data, platform?, include_stats?)          │
+│      生成活动分享文字（微博/微信/小红书/Twitter）                            │
+│  generate_achievement_card(period, stats, platform?)                        │
+│      生成成就卡片（周/月/年总结）                                            │
+│  get_share_platforms()               支持的分享平台列表                     │
+│  build_share_url(platform, url, title)  构建分享 URL                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+总计: 1 + 1 + 7 + 4 + 4 = 18 个 Tools
+```
+
+### Tool 执行管线（MCP Pipeline）
+
+```
+ReActAgent 生成 tool_call(name="search_venues", args={...})
+  │
+  ▼
+PluginManager.dispatch(tool_name, params)
+  │
+  ▼
+MCP Pipeline（横切关注点）:
+  ├─ CacheLayer     → 查缓存（相同参数 5 分钟内复用结果）
+  ├─ RateLimiter    → 每个插件 100 次/分钟
+  ├─ AuditLog       → 每次调用写审计日志
+  ├─ ParameterValidator → JSON Schema 校验参数
+  │
+  ▼
+具体插件 .execute(tool_name, params)
+  │
+  ▼
+返回 Result → 注入 ReAct 下一步的 Observation
+```
+
+---
+
+## 📊 Capability 完整索引（反查）
+
+```
+fit_parsing         → parser
+data_extraction     → parser
+metadata_parsing    → parser
+
+feature_engineering → feature_extractor
+statistics          → feature_extractor
+intensity_distribution → feature_extractor
+
+user_profile        → memory
+context_retrieval   → memory
+memory_update       → memory
+
+training_advice     → recommender
+rule_engine         → recommender
+llm_generation      → recommender
+
+tool_calling        → react
+reasoning           → react
+multi_step_planning → react
+
+总计: 15 个 Capability，被 Orchestrator 用于动态匹配
+```
+
+
 # WenYaSports 面试题库
 
 > 基于项目十大核心亮点，覆盖 Agent 开发、LLM 编排、MCP 生态、记忆系统、工程架构等方向。  
