@@ -1,3 +1,206 @@
+# WenYaSports — 面试项目描述
+
+> 面试官看简历第一眼就要能回答：**"这是个什么项目？为什么值得面？"**  
+> 以下是项目的完整技术描述，建议在回答"介绍一下你的项目"时按此框架展开。
+
+---
+
+## 一句话定位
+
+**WenYaSports** 是一个 **LLM 驱动的多 Agent 运动数据智能分析平台**——用户上传运动数据（.FIT/.CSV），系统自动完成解析、特征提取、训练分析、营养建议，并通过 AI 私教提供交互式问答。
+
+## 解决的问题
+
+运动数据平台（Strava/Keep/悦跑圈）普遍存在三个痛点：
+
+| 痛点 | 现有方案 | WenYaSports 的做法 |
+|------|---------|-------------------|
+| 数据孤岛 | 各平台数据不互通，无法统一分析 | FIT + CSV 双格式解析，支持多源数据导入 |
+| 静态报表 | 只有固定指标（里程/配速/心率），无深度洞察 | 10 个 Agent 协作完成多维分析 + RAG 知识增强 |
+| 千人一面 | 给所有人一样的训练建议 | 用户画像 + 历史记忆 + LLM 个性化生成 |
+
+## 技术栈一览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     全栈技术架构                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  后端（Python）                                                  │
+│  ├── FastAPI          Web 框架 + API 路由                       │
+│  ├── SQLite           用户活动数据持久化                          │
+│  ├── ChromaDB         向量数据库（RAG 知识存储）                  │
+│  ├── sentence-transformers  Embedding 模型                      │
+│  └── HMAC-SHA256      自研 Token 鉴权                             │
+│                                                                  │
+│  前端（React）                                                    │
+│  ├── Vite             构建工具                                    │
+│  ├── React Router     路由管理                                    │
+│  ├── Recharts         可视化图表                                  │
+│  └── Axios            HTTP 通信                                    │
+│                                                                  │
+│  Agent 系统（自研）                                               │
+│  ├── Agent Harness    运行时沙箱（Registry/Blackboard/MessageBus）│
+│  ├── LLM Orchestrator 动态编排 + 重规划                           │
+│  ├── ReAct Agent      推理行动循环                                │
+│  └── MCP Protocol     Client/Server/Registry/Bridge             │
+│                                                                  │
+│  数据存储                                                         │
+│  ├── SQLite           activities 表（按 user_id 过滤）            │
+│  └── ChromaDB         知识库分块 + Metadata Filter 检索           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 架构图
+
+```
+                          ┌──────────────────────────────┐
+                          │       Frontend (React)        │
+                          │  Dashboard · Chat · Upload   │
+                          │  DecisionExplainability · ... │
+                          └──────────────┬───────────────┘
+                                         │ HTTP/JSON
+                          ┌──────────────▼───────────────┐
+                          │    FastAPI REST API           │
+                          │  /auth/* · /activities/*     │
+                          │  /dashboard/summary · /chat  │
+                          └──────────────┬───────────────┘
+                                         │
+              ┌──────────────────────────┼──────────────────────────┐
+              │                          │                          │
+   ┌──────────▼──────────┐    ┌──────────▼──────────┐    ┌─────────▼─────────┐
+   │  Agent Runtime      │    │  Authentication      │    │  Database Layer    │
+   │  Harness            │    │  HMAC-SHA256 Token    │    │  SQLite + ChromaDB │
+   │                     │    │  Register / Login     │    │                    │
+   │  ┌───────────────┐  │    │  Session Isolation   │    │  activities table  │
+   │  │ LLMOrchestrator│◄─┼────┼─────────────────────┤    │  (user_id 过滤)    │
+   │  │ 动态规划+重规划 │  │    │  AuthUser           │    │                    │
+   │  └───────┬───────┘  │    │  Role: admin/user    │    │  chroma collection │
+   │          │          │    └─────────────────────┘    │  (metadata filter) │
+   │          ▼          │                                └────────────────────┘
+   │  ┌───────────────┐  │
+   │  │ AgentRegistry  │  │         ┌──────────────────────┐
+   │  │ Agent列表:     │  │         │  RAG Pipeline          │
+   │  │  ParserAgent   │  │         │                       │
+   │  │  FeatureAgent  │  │         │  SmartChunker 切块    │
+   │  │  MemoryAgent   │  │         │  HybridRetriever 检索 │
+   │  │  ReActAgent    │  │         │  (向量+BM25+RRF+MMR) │
+   │  │  EvaluatorAgent│  │         │                       │
+   │  │  Reflection... │  │         └──────────────────────┘
+   │  └───────┬───────┘  │
+   │          │          │                ┌──────────────────────┐
+   │          ▼          │                │  MCP Plugins          │
+   │  ┌───────────────┐  │                │  strava / venues      │
+   │  │ Blackboard    │◄─┼────────────────┼  map_routing / share │
+   │  │ (共享黑板)     │  │                │  weather             │
+   │  └───────┬───────┘  │                └──────────────────────┘
+   │          │          │
+   │          ▼          │
+   │  ┌───────────────┐  │
+   │  │ MessageBus    │  │
+   │  │ (异步消息)     │  │
+   │  └───────────────┘  │
+   └─────────────────────┘
+```
+
+## 代码规模统计
+
+```
+Total Python Code:  24,091 行（不含测试）
+Frontend Code:       8,588 行（JSX + JS + CSS）
+Test Code:          ~5,000 行（36 个测试文件）
+
+核心模块行数 Top 15:
+┌──────────────────────────────────────────┬───────┐
+│ 模块                                       │  行数 │
+├──────────────────────────────────────────┼───────┤
+│ llm_orchestrator.py  （LLM 动态编排）      │  1199 │
+│ routes.py            （API 路由）          │  1000 │
+│ agentic_workflow.py  （ToT + BeliefState） │   783 │
+│ explainability.py    （决策可解释性）       │   782 │
+│ decision_engine.py   （三层决策）           │   771 │
+│ hierarchical_memory.py（分级记忆）          │   735 │
+│ reaact_agent.py      （ReAct 推理循环）     │   723 │
+│ negotiation.py       （Agent 协商协议）      │   696 │
+│ rag_optimizer.py     （RAG 优化）           │   673 │
+│ belief_state.py      （自主决策状态）        │   638 │
+│ memory_lifecycle.py  （记忆生命周期）         │   636 │
+│ harness.py           （Agent 运行时沙箱）    │   626 │
+│ uncertainty_quantifier.py（不确定性量化）    │   599 │
+│ fault_tolerance.py   （三级容错）           │   595 │
+│ agent_evaluator.py   （质量评估）           │   555 │
+└──────────────────────────────────────────┴───────┘
+
+Agent 数量:           10 个（Parser/Feature/Memory/ReAct/Evaluator/Reflection/...）
+MCP 插件数量:          5 个（Strava/运动场馆/地图/社交/天气）
+React 页面数量:       19 个（Dashboard/Chat/Upload/DecisionExplainability/...）
+测试文件数量:         36 个
+知识库文档数量:        5 份运动科学专业文档
+```
+
+## 十大核心亮点（简历上该写的）
+
+```
+① 自研 Agent Runtime Harness 运行时沙箱
+   对比 LangChain 的 Chain 模式，我们用 AgentRegistry + Blackboard + MessageBus 四件套
+   实现了能力驱动而非 Prompt 驱动的 Agent 协作架构
+
+② LLM 驱动动态编排 + 三级重规划
+   LLM Orchestrator 生成 ExecutionPlan → 按 capability 匹配 Agent → 失败自动重规划
+   max_replanning=3，超过后走规则引擎优雅降级
+
+③ 三层降级架构（零配置可运行）
+   FakeEmbedder 哈希向量 → 规则引擎兜底 LLM → Agent 简化逻辑
+   无 API Key、无嵌入模型、无网络也能跑通全链路
+
+④ MCP Client/Server/Registry/Bridge 四件套
+   支持 stdio/SSE 双传输，MCPAgentBridge 自动将内部 Agent 暴露为 MCP 工具
+   外部系统可直接调用，新增 Agent 零成本暴露
+
+⑤ 分级记忆系统 + 生命周期管理
+   Working（当前会话）/ Episodic（执行历史）/ Semantic（知识画像）三层
+   自动晋升（access_count≥3）、蒸馏（余弦相似度合并）、衰减（30天未访问降级）
+
+⑥ RAG 知识库增强 — 6 步召回优化管线
+   Query Expansion → Category Detection → Vector+BM25 Hybrid Search → RRF Fusion → MMR Diversity → Metadata Rerank
+   SmartChunker 4 种切块模式，动态颗粒度 200-500 token
+
+⑦ 质量闭环：EvaluatorAgent + ReflectionEngine + Guardrails
+   5 维度评估（accuracy/completeness/relevance/format/actionability）
+   ReflectionEngine 失败反思 → 经验存记忆 → 下次自动检索避免重蹈覆辙
+
+⑧ Agent 协商协议 + 三层决策架构
+   Strategic（目标分解）→ Tactical（工具编排）→ Validation（Critique + Debate）
+   多 Agent 能力冲突时自动协商（0.6×quality + 0.4×confidence 综合分）
+
+⑨ 用户系统：注册/鉴权/数据隔离三层
+   HMAC-SHA256 自签名 Token（Demo 级）→ RBAC admin/user 角色
+   SessionHarness + MemoryPool + SQLite WHERE user_id=? 三层数据隔离
+   前端 TopBar 用户菜单 + LoginPage 登录/注册 Tab
+
+⑩ 可观测性：TraceCollector + 决策可解释性
+    append-only 事件日志支持完整回放
+    DecisionExplainabilityPage 展示决策链可视化 + 协商协议 + 不确定性量化
+```
+
+## 面试开场 60 秒话术
+
+> 面试官好，我介绍一下 WenYaSports 这个项目。
+>
+> **它是什么**：一个 LLM 驱动的多 Agent 运动数据智能分析平台。用户上传 .FIT 或 .CSV 运动数据，系统自动完成解析、特征提取、训练分析、营养建议，还能通过 AI 私教交互式问答。
+>
+> **为什么做**：现有运动平台（Strava/Keep）数据孤岛、只有静态报表、千人一面。我们想解决这三个问题。
+>
+> **技术亮点**（挑 2-3 个说）：
+> 1. 自研了一个 Agent Runtime Harness 运行时沙箱，核心是 AgentRegistry + Blackboard + MessageBus 四件套，对比 LangChain 的 Chain 模式，我们是能力驱动而非 Prompt 驱动，更适合生产。
+> 2. LLM Orchestrator 动态编排 + 三级降级——没有 API Key、没有嵌入模型也能跑通全链路。
+> 3. MCP 协议集成了 5 个外部插件（Strava/运动场馆/地图/社交/天气），MCPAgentBridge 能把内部 Agent 自动暴露为 MCP 工具。
+>
+> **代码规模**：后端 24K 行 Python、前端 8.5K 行 React，10 个 Agent、5 个 MCP 插件、19 个前端页面、36 个测试文件。
+>
+> **我具体做了什么**：整个项目的架构设计、Agent 系统、LLM 编排、MCP 集成、记忆系统、RAG 优化、鉴权和数据隔离都是我做的。
+
+---
+
 # WenYaSports 面试题库
 
 > 基于项目十大核心亮点，覆盖 Agent 开发、LLM 编排、MCP 生态、记忆系统、工程架构等方向。  
